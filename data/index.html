@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jiggla</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <style>
+    .logo-font {
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 1px;
+    }
+    .navbar-brand {
+      font-size: 1.6rem;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body class="bg-dark">
+  <div id="loading" class="text-center mt-5">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="text-light mt-2">Loading...</p>
+  </div>
+  
+  <div id="content" class="container-fluid py-4" style="display: none;">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+      <div class="container-fluid">
+        <a class="navbar-brand logo-font" href="/">
+          <i class="bi bi-mouse2-fill"></i> JIGGLA
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link active" href="/"><i class="bi bi-house-fill"></i> Dashboard</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/settings-admin.html"><i class="bi bi-gear-fill"></i> Settings</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/ota.html"><i class="bi bi-cloud-arrow-up-fill"></i> OTA</a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <button id="test-button" class="btn btn-sm btn-light me-2"><i class="bi bi-joystick"></i> Test Movement</button>
+            </li>
+            <li class="nav-item">
+              <button id="logout-button" class="btn btn-sm btn-outline-light"><i class="bi bi-box-arrow-right"></i> Logout</button>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="row justify-content-center">
+      <div class="col-md-10">
+        <div class="card border-secondary">
+          <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h3 class="mb-0">Dashboard</h3>
+            <div>
+              <small class="me-2" id="save-status"></small>
+            </div>
+          </div>
+          <div class="card-body">
+            <form id="config-form">
+              <!-- Main Controls -->
+              <div class="row mb-4">
+                <div class="col-md-6">
+                  <div class="card h-100 bg-dark">
+                    <div class="card-body">
+                      <h5 class="card-title">Status</h5>
+                      <div class="mb-3">
+                        <div class="form-check form-switch">
+                          <input class="form-check-input config-control" type="checkbox" id="jiggler-enabled" checked role="switch">
+                          <label class="form-check-label" for="jiggler-enabled">
+                            Enable Mouse Jiggler
+                          </label>
+                        </div>
+                      </div>
+                      <div class="mb-3">
+                        <label for="move-interval" class="form-label">Movement Interval:</label>
+                        <div class="input-group">
+                          <input type="number" class="form-control config-control" id="move-interval" min="1" step="1">
+                          <span class="input-group-text">seconds</span>
+                        </div>
+                      </div>
+                      <div class="mb-3">
+                        <label for="movement-speed" class="form-label">Movement Delay:</label>
+                        <div class="input-group">
+                          <input type="number" class="form-control config-control" id="movement-speed" min="1" max="1000" step="1">
+                          <span class="input-group-text">ms</span>
+                        </div>
+                        <div class="form-text">Higher values = slower movement</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="col-md-6">
+                  <div class="card h-100 bg-dark">
+                    <div class="card-body">
+                      <h5 class="card-title">Movement Pattern</h5>
+                      <div class="mb-3">
+                        <div class="form-check form-switch">
+                          <input class="form-check-input config-control" type="checkbox" id="circular-movement" role="switch">
+                          <label class="form-check-label" for="circular-movement">
+                            Use Circular Movement
+                          </label>
+                        </div>
+                      </div>
+                      <div class="mb-3">
+                        <label for="movement-x" class="form-label">Distance X (pixels):</label>
+                        <input type="range" class="form-range config-control" id="movement-x" min="-200" max="200" step="1">
+                        <div class="d-flex justify-content-between">
+                          <small>-200</small>
+                          <small id="x-value">0</small>
+                          <small>200</small>
+                        </div>
+                      </div>
+                      <div class="mb-3">
+                        <label for="movement-y" class="form-label">Distance Y (pixels):</label>
+                        <input type="range" class="form-range config-control" id="movement-y" min="-200" max="200" step="1">
+                        <div class="d-flex justify-content-between">
+                          <small>-200</small>
+                          <small id="y-value">0</small>
+                          <small>200</small>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Advanced Settings -->
+              <div class="card bg-dark mb-3">
+                <div class="card-header">
+                  <button class="btn btn-link text-white p-0" type="button" data-bs-toggle="collapse" data-bs-target="#advancedSettings">
+                    <i class="bi bi-gear-fill me-2"></i> Advanced Settings
+                  </button>
+                </div>
+                <div class="collapse" id="advancedSettings">
+                  <div class="card-body">
+                    <div class="row">
+                      <div class="col-md-6">
+                        <div class="mb-3">
+                          <div class="form-check form-switch">
+                            <input class="form-check-input config-control" type="checkbox" id="random-delay" role="switch">
+                            <label class="form-check-label" for="random-delay">
+                              Random Delay Variation <span class="badge bg-info">New</span>
+                            </label>
+                            <div class="form-text">Adds ±30% random variation to movement interval</div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="col-md-6">
+                        <div class="mb-3">
+                          <div class="form-check form-switch">
+                            <input class="form-check-input config-control" type="checkbox" id="movement-trail" role="switch">
+                            <label class="form-check-label" for="movement-trail">
+                              Movement Trail <span class="badge bg-info">New</span>
+                            </label>
+                            <div class="form-text">Creates multiple mouse movements in sequence</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div class="card bg-dark">
+                <div class="card-header">
+                  <button class="btn btn-link text-white p-0" type="button" data-bs-toggle="collapse" data-bs-target="#activityLog">
+                    <i class="bi bi-clock-history me-2"></i> Activity Log
+                  </button>
+                </div>
+                <div class="collapse" id="activityLog">
+                  <div class="card-body">
+                    <div class="row">
+                      <div class="col-md-6">
+                        <div class="alert alert-secondary">
+                          Last movement: <span id="last-movement">-</span>
+                        </div>
+                      </div>
+                      <div class="col-md-6">
+                        <div class="alert alert-info">
+                          Next movement: <span id="next-movement-countdown">-</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div id="log-container" class="bg-black p-2 rounded" style="height: 150px; overflow-y: auto;">
+                      <div id="activity-log" class="text-light" style="font-family: monospace; font-size: 0.8rem;"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </form>
+            
+            <div id="status" class="alert mt-3 d-none"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/main.js"></script>
+</body>
+</html> 
