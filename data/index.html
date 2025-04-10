@@ -3,9 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>s2mj</title>
+  <title>Jiggla</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <style>
+    .logo-font {
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 1px;
+    }
+    .navbar-brand {
+      font-size: 1.6rem;
+      font-weight: 700;
+    }
+  </style>
 </head>
 <body class="bg-dark">
   <div id="loading" class="text-center mt-5">
@@ -15,16 +26,46 @@
     <p class="text-light mt-2">Loading...</p>
   </div>
   
-  <div id="content" class="container py-4" style="display: none;">
+  <div id="content" class="container-fluid py-4" style="display: none;">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+      <div class="container-fluid">
+        <a class="navbar-brand logo-font" href="/">
+          <i class="bi bi-mouse2-fill"></i> JIGGLA
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link active" href="/"><i class="bi bi-house-fill"></i> Dashboard</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/settings-admin.html"><i class="bi bi-gear-fill"></i> Settings</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/ota.html"><i class="bi bi-cloud-arrow-up-fill"></i> OTA</a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <button id="test-button" class="btn btn-sm btn-light me-2"><i class="bi bi-joystick"></i> Test Movement</button>
+            </li>
+            <li class="nav-item">
+              <button id="logout-button" class="btn btn-sm btn-outline-light"><i class="bi bi-box-arrow-right"></i> Logout</button>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
     <div class="row justify-content-center">
-      <div class="col-md-8">
+      <div class="col-md-10">
         <div class="card border-secondary">
           <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
-            <h3 class="mb-0">s2mj</h3>
+            <h3 class="mb-0">Dashboard</h3>
             <div>
               <small class="me-2" id="save-status"></small>
-              <button id="test-button" class="btn btn-sm btn-light">Test Movement</button>
-              <button id="logout-button" class="btn btn-sm btn-outline-light ms-2">Logout</button>
             </div>
           </div>
           <div class="card-body">
@@ -141,8 +182,17 @@
                 </div>
                 <div class="collapse" id="activityLog">
                   <div class="card-body">
-                    <div class="alert alert-secondary">
-                      Last movement: <span id="last-movement">-</span>
+                    <div class="row">
+                      <div class="col-md-6">
+                        <div class="alert alert-secondary">
+                          Last movement: <span id="last-movement">-</span>
+                        </div>
+                      </div>
+                      <div class="col-md-6">
+                        <div class="alert alert-info">
+                          Next movement: <span id="next-movement-countdown">-</span>
+                        </div>
+                      </div>
                     </div>
                     <div id="log-container" class="bg-black p-2 rounded" style="height: 150px; overflow-y: auto;">
                       <div id="activity-log" class="text-light" style="font-family: monospace; font-size: 0.8rem;"></div>

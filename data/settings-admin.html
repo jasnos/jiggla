@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Remote Mouse</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        #trackpad {
+            width: 300px;
+            height: 200px;
+            background-color: #f0f0f0;
+            margin: 20px auto;
+            border: 2px solid #ccc;
+            border-radius: 10px;
+            position: relative;
+            touch-action: none;
+        }
+        .button {
+            padding: 10px 20px;
+            margin: 10px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .button-group {
+            display: flex;
+            justify-content: center;
+        }
+    </style>
+</head>
+<body>
+    <h1>ESP32 Remote Mouse</h1>
+    <div id="trackpad"></div>
+    <div class="button-group">
+        <button class="button" id="leftClick">Left Click</button>
+        <button class="button" id="rightClick">Right Click</button>
+    </div>
+    <p id="status">Status: Connected</p>
+
+    <script>
+        const trackpad = document.getElementById('trackpad');
+        const leftClick = document.getElementById('leftClick');
+        const rightClick = document.getElementById('rightClick');
+        const status = document.getElementById('status');
+        
+        let lastX = 0;
+        let lastY = 0;
+        let isTracking = false;
+        
+        // Handle touch/mouse events on trackpad
+        trackpad.addEventListener('mousedown', startTracking);
+        trackpad.addEventListener('touchstart', handleTouchStart);
+        
+        document.addEventListener('mousemove', moveTracker);
+        document.addEventListener('touchmove', handleTouchMove);
+        
+        document.addEventListener('mouseup', stopTracking);
+        document.addEventListener('touchend', stopTracking);
+        
+        leftClick.addEventListener('click', () => sendClick('left'));
+        rightClick.addEventListener('click', () => sendClick('right'));
+        
+        function startTracking(e) {
+            isTracking = true;
+            e.preventDefault();
+            lastX = e.clientX;
+            lastY = e.clientY;
+        }
+        
+        function handleTouchStart(e) {
+            isTracking = true;
+            e.preventDefault();
+            const touch = e.touches[0];
+            lastX = touch.clientX;
+            lastY = touch.clientY;
+        }
+        
+        function moveTracker(e) {
+            if (!isTracking) return;
+            e.preventDefault();
+            
+            const deltaX = e.clientX - lastX;
+            const deltaY = e.clientY - lastY;
+            
+            if (deltaX !== 0 || deltaY !== 0) {
+                sendMouseData(deltaX, deltaY);
+                lastX = e.clientX;
+                lastY = e.clientY;
+            }
+        }
+        
+        function handleTouchMove(e) {
+            if (!isTracking) return;
+            e.preventDefault();
+            
+            const touch = e.touches[0];
+            const deltaX = touch.clientX - lastX;
+            const deltaY = touch.clientY - lastY;
+            
+            if (deltaX !== 0 || deltaY !== 0) {
+                sendMouseData(deltaX, deltaY);
+                lastX = touch.clientX;
+                lastY = touch.clientY;
+            }
+        }
+        
+        function stopTracking() {
+            isTracking = false;
+        }
+        
+        function sendMouseData(x, y) {
+            fetch('/mouse', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    x: Math.round(x),
+                    y: Math.round(y)
+                })
+            })
+            .catch(error => {
+                status.textContent = 'Status: Connection error';
+                console.error('Error:', error);
+            });
+        }
+        
+        function sendClick(button) {
+            fetch('/click', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    button: button
+                })
+            })
+            .catch(error => {
+                status.textContent = 'Status: Connection error';
+                console.error('Error:', error);
+            });
+        }
+    </script>
+</body>
+</html>

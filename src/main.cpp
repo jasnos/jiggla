@@ -17,20 +17,36 @@
 #include <SPIFFS.h>
 #include <FS.h>
 #include <math.h>
+#include <Update.h>
 
-// Default configuration
-const char* default_ssid = "s2mj";
-const char* default_password = "dtvwvjwtrd";
-const char* default_hostname = "s2mj";
-const char* default_username = "woj";
-const char* default_auth_password = "dtvwv!jwtrd";
-const int default_webport = 8787;
+// Include credentials (not tracked by git)
+#include "../credentials.h"
+
+// Default configuration - will be overridden by settings.json if it exists
+const char* default_ssid = DEFAULT_AP_SSID;
+const char* default_password = DEFAULT_AP_PASSWORD;
+const char* default_hostname = DEFAULT_HOSTNAME;
+const char* default_username = DEFAULT_WEB_USERNAME;
+const char* default_auth_password = DEFAULT_WEB_PASSWORD;
+const int default_webport = DEFAULT_WEB_PORT; // Keep as const for default value
+
+// Current settings that can be modified at runtime
+char* current_ssid = strdup(default_ssid);
+char* current_password = strdup(default_password);
+char* current_hostname = strdup(default_hostname);
+char* current_username = strdup(default_username);
+char* current_auth_password = strdup(default_auth_password);
+int current_webport = default_webport;
 const IPAddress default_ip(192, 168, 4, 1);
 
 // Preferred WiFi network
-const char* preferred_ssid = "Antonov";
-const char* preferred_password = "olaiwojtek";
+const char* preferred_ssid = WIFI_SSID;
+const char* preferred_password = WIFI_PASSWORD;
 const int wifi_connect_timeout = 10000; // 10 seconds timeout for WiFi connection
+
+// STA mode customizable credentials (loaded from settings)
+char* sta_ssid = strdup(preferred_ssid);
+char* sta_password = strdup(preferred_password);
 
 // Default mouse movement settings
 int move_interval = 4 * 60 * 1000; // 4 minutes in milliseconds
@@ -43,14 +59,15 @@ bool random_delay = false; // Randomize delay between movements
 bool movement_trail = false; // Create a movement trail
 const int CIRCLE_STEPS = 36; // Number of steps to complete a circle
 
-// Config file path
+// File paths
 const char* config_file = "/config.json";
+const char* settings_file = "/settings.json";
 
 // USB Mouse
 USBHIDMouse Mouse;
 
 // Web server
-AsyncWebServer server(default_webport);
+AsyncWebServer* server;
 
 // Timestamp for last movement
 unsigned long last_move_time = 0;
@@ -69,9 +86,21 @@ unsigned long session_timeout = 30 * 60 * 1000; // 30 minutes in milliseconds
 // WiFi mode
 bool isAPMode = false;
 
+// Add a new variable for hidden AP option
+bool ap_hidden = false;
+
+// WiFi mode settings
+char* wifi_mode = strdup("ap"); // "ap" or "apsta"
+char* ap_availability = strdup("always"); // "always" or "timeout"
+int ap_timeout = 5; // minutes
+unsigned long ap_start_time = 0; // When AP was started
+bool ap_active = true; // Is AP currently active
+
 // Function prototypes
 void loadConfig();
 void saveConfig();
+void loadSettings();
+void saveSettings();
 void setupWiFi();
 void setupAccessPoint();
 void setupWebServer();
@@ -85,12 +114,13 @@ unsigned long calculateMoveInterval();
 void moveMouse();
 void saveSessions();
 void loadSessions();
+void cleanupMemory();
 
 void setup() {
   // Initialize serial for debugging
   Serial.begin(115200);
   delay(500);
-  Serial.println("\nStarting s2mj");
+  Serial.println("\nStarting jiggla");
 
   // Initialize USB with custom VID/PID to appear as a branded mouse
   // Logitech VID: 0x046d, Mouse PID: 0xc077 (M105 Optical Mouse)
@@ -103,7 +133,10 @@ void setup() {
   // Initialize file system
   initSPIFFS();
   
-  // Load configuration
+  // Load settings (auth, AP details)
+  loadSettings();
+  
+  // Load configuration (mouse movement settings)
   loadConfig();
   
   // Initialize sessions
@@ -117,6 +150,9 @@ void setup() {
   // Setup WiFi (STA mode with fallback to AP mode)
   setupWiFi();
   
+  // Initialize web server with current port
+  server = new AsyncWebServer(current_webport);
+  
   // Setup web server
   setupWebServer();
   
@@ -127,7 +163,7 @@ void setup() {
   // Setup RNG for session IDs
   randomSeed(micros());
   
-  Serial.println("s2mj ready");
+  Serial.println("jiggla ready");
 }
 
 void loop() {
@@ -143,6 +179,21 @@ void loop() {
     
     // Calculate and store next scheduled movement time
     next_move_time = millis() + calculateMoveInterval();
+  }
+  
+  // Handle AP timeout if configured
+  if (strcmp(ap_availability, "timeout") == 0 && ap_active) {
+    unsigned long ap_elapsed_minutes = (millis() - ap_start_time) / 60000;
+    
+    if (ap_elapsed_minutes >= ap_timeout) {
+      Serial.println("AP timeout reached, turning off WiFi");
+      
+      // Turn off WiFi
+      WiFi.mode(WIFI_OFF);
+      ap_active = false;
+      
+      Serial.println("WiFi turned off, device will continue as USB mouse jiggler only");
+    }
   }
   
   // Cleanup expired sessions periodically
@@ -248,42 +299,203 @@ void saveConfig() {
   }
 }
 
-void setupWiFi() {
-  Serial.println("Setting up WiFi");
+void loadSettings() {
+  Serial.println("Loading settings");
   
-  // First try to connect to the preferred network in STA mode
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(preferred_ssid, preferred_password);
-  
-  Serial.print("Connecting to WiFi network: ");
-  Serial.println(preferred_ssid);
-  
-  // Wait for connection with timeout
-  unsigned long startAttemptTime = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < wifi_connect_timeout) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    // Successfully connected to preferred network
-    Serial.print("Connected to WiFi network. IP address: ");
-    Serial.println(WiFi.localIP());
-    isAPMode = false;
-    
-    // Setup mDNS
-    if (!MDNS.begin(default_hostname)) {
-      Serial.println("Error setting up mDNS responder!");
-    } else {
-      Serial.println("mDNS responder started");
-      MDNS.addService("http", "tcp", default_webport);
-      MDNS.addService("s2mj", "tcp", default_webport);
+  if (SPIFFS.exists(settings_file)) {
+    File file = SPIFFS.open(settings_file, "r");
+    if (file) {
+      StaticJsonDocument<512> doc;
+      DeserializationError error = deserializeJson(doc, file);
+      
+      if (!error) {
+        // Load AP settings
+        if (doc.containsKey("ap")) {
+          if (doc["ap"].containsKey("ssid")) {
+            // Free the old string if it exists
+            if (current_ssid != NULL) free(current_ssid);
+            current_ssid = strdup(doc["ap"]["ssid"].as<const char*>());
+          }
+          if (doc["ap"].containsKey("password")) {
+            if (current_password != NULL) free(current_password);
+            current_password = strdup(doc["ap"]["password"].as<const char*>());
+          }
+          if (doc["ap"].containsKey("hidden")) {
+            ap_hidden = doc["ap"]["hidden"].as<bool>();
+          }
+        }
+        
+        // Load hostname (now at root level)
+        if (doc.containsKey("hostname")) {
+          if (current_hostname != NULL) free(current_hostname);
+          current_hostname = strdup(doc["hostname"].as<const char*>());
+        }
+        
+        // Load WiFi mode settings
+        if (doc.containsKey("wifi_mode")) {
+          if (wifi_mode != NULL) free(wifi_mode);
+          wifi_mode = strdup(doc["wifi_mode"].as<const char*>());
+        }
+        
+        if (doc.containsKey("ap_availability")) {
+          if (ap_availability != NULL) free(ap_availability);
+          ap_availability = strdup(doc["ap_availability"].as<const char*>());
+        }
+        
+        if (doc.containsKey("ap_timeout")) {
+          ap_timeout = doc["ap_timeout"].as<int>();
+        }
+        
+        // Load STA settings
+        if (doc.containsKey("sta")) {
+          if (doc["sta"].containsKey("ssid")) {
+            if (sta_ssid != NULL) free(sta_ssid);
+            sta_ssid = strdup(doc["sta"]["ssid"].as<const char*>());
+          }
+          if (doc["sta"].containsKey("password")) {
+            if (sta_password != NULL) free(sta_password);
+            sta_password = strdup(doc["sta"]["password"].as<const char*>());
+          }
+        }
+        
+        // Load auth settings
+        if (doc.containsKey("auth")) {
+          if (doc["auth"].containsKey("username")) {
+            if (current_username != NULL) free(current_username);
+            current_username = strdup(doc["auth"]["username"].as<const char*>());
+          }
+          if (doc["auth"].containsKey("password")) {
+            if (current_auth_password != NULL) free(current_auth_password);
+            current_auth_password = strdup(doc["auth"]["password"].as<const char*>());
+          }
+        }
+        
+        // Load web port
+        if (doc.containsKey("web_port")) {
+          current_webport = doc["web_port"].as<int>();
+        }
+        
+        Serial.println("Settings loaded successfully");
+      } else {
+        Serial.println("Failed to deserialize settings");
+      }
+      
+      file.close();
     }
   } else {
-    // Failed to connect, fall back to AP mode
-    Serial.println("Failed to connect to preferred network. Falling back to AP mode.");
-    setupAccessPoint();
+    Serial.println("Settings file doesn't exist, using defaults");
+    saveSettings();
+  }
+}
+
+void saveSettings() {
+  Serial.println("Saving settings");
+  
+  StaticJsonDocument<512> doc;
+  
+  // AP settings
+  JsonObject ap = doc.createNestedObject("ap");
+  ap["ssid"] = current_ssid;
+  ap["password"] = current_password;
+  ap["hidden"] = ap_hidden;
+  
+  // Hostname at root level
+  doc["hostname"] = current_hostname;
+  
+  // WiFi mode settings
+  doc["wifi_mode"] = wifi_mode;
+  doc["ap_availability"] = ap_availability;
+  doc["ap_timeout"] = ap_timeout;
+  
+  // STA settings
+  JsonObject sta = doc.createNestedObject("sta");
+  sta["ssid"] = sta_ssid;
+  sta["password"] = sta_password;
+  
+  // Auth settings
+  JsonObject auth = doc.createNestedObject("auth");
+  auth["username"] = current_username;
+  auth["password"] = current_auth_password;
+  
+  // Web port
+  doc["web_port"] = current_webport;
+  
+  File file = SPIFFS.open(settings_file, "w");
+  if (file) {
+    if (serializeJson(doc, file) == 0) {
+      Serial.println("Failed to write settings");
+    } else {
+      Serial.println("Settings saved successfully");
+    }
+    file.close();
+  } else {
+    Serial.println("Failed to open settings file for writing");
+  }
+}
+
+void setupWiFi() {
+  Serial.println("Setting up WiFi");
+  ap_start_time = millis(); // Record the time AP is started
+  ap_active = true;
+  
+  if (strcmp(wifi_mode, "apsta") == 0) {
+    // AP+STA mode
+    Serial.println("Setting up WiFi in AP+STA mode");
+    
+    // Start in AP+STA mode
+    WiFi.mode(WIFI_AP_STA);
+    
+    // Configure and start AP
+    WiFi.softAPConfig(default_ip, default_ip, IPAddress(255, 255, 255, 0));
+    WiFi.softAP(current_ssid, current_password, 1, ap_hidden);
+    
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+    
+    // Try to connect to the preferred STA network
+    WiFi.begin(sta_ssid, sta_password);
+    
+    Serial.print("Connecting to WiFi network: ");
+    Serial.println(sta_ssid);
+    
+    // Wait for connection with timeout
+    unsigned long startAttemptTime = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < wifi_connect_timeout) {
+      delay(500);
+      Serial.print(".");
+    }
+    Serial.println();
+    
+    if (WiFi.status() == WL_CONNECTED) {
+      // Successfully connected to preferred network
+      Serial.print("Connected to WiFi network. IP address: ");
+      Serial.println(WiFi.localIP());
+      isAPMode = false;
+    } else {
+      Serial.println("Failed to connect to preferred network, but AP is still active.");
+      isAPMode = true;
+    }
+  } else {
+    // AP Only mode
+    Serial.println("Setting up WiFi in AP Only mode");
+    
+    WiFi.mode(WIFI_AP);
+    WiFi.softAPConfig(default_ip, default_ip, IPAddress(255, 255, 255, 0));
+    WiFi.softAP(current_ssid, current_password, 1, ap_hidden);
+    
+    Serial.print("AP IP address: ");
+    Serial.println(WiFi.softAPIP());
+    
+    isAPMode = true;
+  }
+  
+  // Setup mDNS
+  if (!MDNS.begin(current_hostname)) {
+    Serial.println("Error setting up mDNS responder!");
+  } else {
+    Serial.println("mDNS responder started");
+    MDNS.addService("http", "tcp", current_webport);
+    MDNS.addService("jiggla", "tcp", current_webport);
   }
 }
 
@@ -292,17 +504,19 @@ void setupAccessPoint() {
   
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(default_ip, default_ip, IPAddress(255, 255, 255, 0));
-  WiFi.softAP(default_ssid, default_password);
+  
+  // Use the hidden parameter if enabled
+  WiFi.softAP(current_ssid, current_password, 1, ap_hidden);
   
   Serial.print("AP IP address: ");
   Serial.println(WiFi.softAPIP());
   
-  if (!MDNS.begin(default_hostname)) {
+  if (!MDNS.begin(current_hostname)) {
     Serial.println("Error setting up mDNS responder!");
   } else {
     Serial.println("mDNS responder started");
-    MDNS.addService("http", "tcp", default_webport);
-    MDNS.addService("s2mj", "tcp", default_webport);
+    MDNS.addService("http", "tcp", current_webport);
+    MDNS.addService("jiggla", "tcp", current_webport);
   }
   
   isAPMode = true;
@@ -379,8 +593,11 @@ void cleanupExpiredSessions() {
 void setupWebServer() {
   Serial.println("Setting up web server");
   
+  // Route to serve static files
+  server->serveStatic("/", SPIFFS, "/");
+  
   // Redirect all requests to login page if not authenticated
-  server.onNotFound([](AsyncWebServerRequest *request) {
+  server->onNotFound([](AsyncWebServerRequest *request) {
     Serial.print("Unhandled request for URL: ");
     Serial.println(request->url());
     
@@ -391,11 +608,8 @@ void setupWebServer() {
     }
   });
   
-  // Route to serve static files
-  server.serveStatic("/", SPIFFS, "/");
-  
   // Serve main page (only if authenticated)
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     Serial.println("Received request for main page");
     
     if (validateSession(request)) {
@@ -408,7 +622,7 @@ void setupWebServer() {
   });
   
   // Serve login page
-  server.on("/login", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/login", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (validateSession(request)) {
       request->redirect("/");
     } else {
@@ -418,17 +632,17 @@ void setupWebServer() {
   });
   
   // Block direct access to index.html
-  server.on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->redirect("/");
   });
   
   // Block direct access to login.html
-  server.on("/login.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/login.html", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->redirect("/login");
   });
   
   // API endpoint to check authentication
-  server.on("/api/auth/check", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/api/auth/check", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (validateSession(request)) {
       request->send(200, "application/json", "{\"status\":\"authenticated\"}");
     } else {
@@ -437,10 +651,11 @@ void setupWebServer() {
   });
   
   // API endpoint to login
-  server.on("/api/auth/login", HTTP_POST, 
+  server->on("/api/auth/login", HTTP_POST, 
     [](AsyncWebServerRequest *request) {
       // Empty handler for request
     }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Process login request
     if (request->_tempObject != NULL) {
       // Already processed
       return;
@@ -456,7 +671,7 @@ void setupWebServer() {
       String username = doc["username"].as<String>();
       String password = doc["password"].as<String>();
       
-      if (username == default_username && password == default_auth_password) {
+      if (username == current_username && password == current_auth_password) {
         // Create new session
         String sessionId = generateSessionId();
         
@@ -495,7 +710,7 @@ void setupWebServer() {
   });
   
   // API endpoint to logout
-  server.on("/api/auth/logout", HTTP_POST, [](AsyncWebServerRequest *request) {
+  server->on("/api/auth/logout", HTTP_POST, [](AsyncWebServerRequest *request) {
     bool sessionFound = false;
     String sessionId = "";
     
@@ -539,7 +754,7 @@ void setupWebServer() {
   });
   
   // API endpoint to get current configuration
-  server.on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/api/config", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!validateSession(request)) {
       request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
       return;
@@ -562,7 +777,7 @@ void setupWebServer() {
   });
   
   // API endpoint to get device status information
-  server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
+  server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!validateSession(request)) {
       request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
       return;
@@ -582,7 +797,7 @@ void setupWebServer() {
   });
   
   // API endpoint to update configuration
-  server.on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request) {
+  server->on("/api/config", HTTP_POST, [](AsyncWebServerRequest *request) {
     // Only validate the session in the first handler, 
     // but don't send a response here
     if (!validateSession(request)) {
@@ -648,7 +863,7 @@ void setupWebServer() {
   });
   
   // API endpoint to trigger mouse movement immediately
-  server.on("/api/move", HTTP_POST, [](AsyncWebServerRequest *request) {
+  server->on("/api/move", HTTP_POST, [](AsyncWebServerRequest *request) {
     if (!validateSession(request)) {
       request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
       return;
@@ -664,8 +879,244 @@ void setupWebServer() {
     request->send(200, "application/json", "{\"status\":\"success\"}");
   });
   
+  // API endpoint to get settings
+  server->on("/api/settings", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      return;
+    }
+    
+    StaticJsonDocument<512> doc;
+    
+    // AP settings
+    JsonObject ap = doc.createNestedObject("ap");
+    ap["ssid"] = current_ssid;
+    ap["password"] = current_password;
+    ap["hidden"] = ap_hidden;
+    
+    // Hostname at root level
+    doc["hostname"] = current_hostname;
+    
+    // WiFi mode settings
+    doc["wifi_mode"] = wifi_mode;
+    doc["ap_availability"] = ap_availability;
+    doc["ap_timeout"] = ap_timeout;
+    
+    // STA settings
+    JsonObject sta = doc.createNestedObject("sta");
+    sta["ssid"] = sta_ssid;
+    sta["password"] = sta_password;
+    
+    // Auth settings
+    JsonObject auth = doc.createNestedObject("auth");
+    auth["username"] = current_username;
+    // Don't send the actual password for security
+    auth["password"] = "";
+    
+    // Web port
+    doc["web_port"] = current_webport;
+    
+    String response;
+    serializeJson(doc, response);
+    
+    request->send(200, "application/json", response);
+  });
+  
+  // API endpoint to update settings
+  server->on("/api/settings", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // Only validate the session in the first handler
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      request->_tempObject = (void*)1; // Mark as processed
+      return;
+    }
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Check if response was already sent
+    if (request->_tempObject != NULL) {
+      return;
+    }
+    
+    StaticJsonDocument<512> doc;
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (!error) {
+      bool changed = false;
+      
+      // Update AP settings
+      if (doc.containsKey("ap")) {
+        if (doc["ap"].containsKey("ssid")) {
+          if (current_ssid != NULL) free(current_ssid);
+          current_ssid = strdup(doc["ap"]["ssid"].as<const char*>());
+          changed = true;
+        }
+        if (doc["ap"].containsKey("password")) {
+          if (current_password != NULL) free(current_password);
+          current_password = strdup(doc["ap"]["password"].as<const char*>());
+          changed = true;
+        }
+        if (doc["ap"].containsKey("hidden")) {
+          ap_hidden = doc["ap"]["hidden"].as<bool>();
+          changed = true;
+        }
+      }
+      
+      // Update hostname (now at root level)
+      if (doc.containsKey("hostname")) {
+        if (current_hostname != NULL) free(current_hostname);
+        current_hostname = strdup(doc["hostname"].as<const char*>());
+        changed = true;
+      }
+      
+      // Update WiFi mode settings
+      if (doc.containsKey("wifi_mode")) {
+        if (wifi_mode != NULL) free(wifi_mode);
+        wifi_mode = strdup(doc["wifi_mode"].as<const char*>());
+        changed = true;
+      }
+      
+      if (doc.containsKey("ap_availability")) {
+        if (ap_availability != NULL) free(ap_availability);
+        ap_availability = strdup(doc["ap_availability"].as<const char*>());
+        changed = true;
+      }
+      
+      if (doc.containsKey("ap_timeout")) {
+        ap_timeout = doc["ap_timeout"].as<int>();
+        changed = true;
+      }
+      
+      // Update STA settings
+      if (doc.containsKey("sta")) {
+        if (doc["sta"].containsKey("ssid")) {
+          if (sta_ssid != NULL) free(sta_ssid);
+          sta_ssid = strdup(doc["sta"]["ssid"].as<const char*>());
+          changed = true;
+        }
+        if (doc["sta"].containsKey("password")) {
+          if (sta_password != NULL) free(sta_password);
+          sta_password = strdup(doc["sta"]["password"].as<const char*>());
+          changed = true;
+        }
+      }
+      
+      // Update Auth settings
+      if (doc.containsKey("auth")) {
+        if (doc["auth"].containsKey("username")) {
+          if (current_username != NULL) free(current_username);
+          current_username = strdup(doc["auth"]["username"].as<const char*>());
+          changed = true;
+        }
+        if (doc["auth"].containsKey("password") && doc["auth"]["password"].as<String>().length() > 0) {
+          if (current_auth_password != NULL) free(current_auth_password);
+          current_auth_password = strdup(doc["auth"]["password"].as<const char*>());
+          changed = true;
+        }
+      }
+      
+      // Update web port
+      if (doc.containsKey("web_port")) {
+        current_webport = doc["web_port"].as<int>();
+        changed = true;
+      }
+      
+      if (changed) {
+        // Save settings
+        saveSettings();
+        
+        request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Settings updated successfully\"}");
+      } else {
+        request->send(200, "application/json", "{\"status\":\"warning\",\"message\":\"No changes were made\"}");
+      }
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+    }
+  });
+  
+  // API endpoint to reboot device
+  server->on("/api/reboot", HTTP_POST, [](AsyncWebServerRequest *request) {
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      return;
+    }
+    
+    // Send response before rebooting
+    request->send(200, "application/json", "{\"status\":\"success\",\"message\":\"Rebooting device\"}");
+    
+    // Schedule reboot after sending response
+    delay(500);
+    ESP.restart();
+  });
+  
+  // Serve the OTA update page with authentication
+  server->on("/ota.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!validateSession(request)) {
+      request->redirect("/login");
+      return;
+    }
+    request->send(SPIFFS, "/ota.html", "text/html");
+  });
+  
+  // Handle redirect from /update to /ota.html
+  server->on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
+    if (!validateSession(request)) {
+      request->redirect("/login");
+      return;
+    }
+    request->redirect("/ota.html");
+  });
+  
+  // Handle OTA update file upload
+  server->on("/update", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // Send the response first
+    AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", 
+      (Update.hasError()) ? "Update failed!" : "Update success! Rebooting...");
+    response->addHeader("Connection", "close");
+    request->send(response);
+    
+    // Wait a bit and then restart
+    delay(500);
+    ESP.restart();
+  }, [](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+    // Check authentication
+    if (!validateSession(request)) {
+      return;
+    }
+    
+    // Get update type parameter (firmware or filesystem)
+    String updateType = "firmware"; // Default to firmware
+    if (request->hasParam("update_type", true)) {
+      updateType = request->getParam("update_type", true)->value();
+    }
+    
+    // First chunk received
+    if (index == 0) {
+      Serial.printf("OTA Update started: %s (Type: %s)\n", filename.c_str(), updateType.c_str());
+      
+      // Start update with appropriate command based on type
+      int cmd = (updateType == "filesystem") ? U_SPIFFS : U_FLASH;
+      
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) {
+        Serial.println("OTA error: " + String(Update.errorString()));
+      }
+    }
+    
+    // Write chunk to flash
+    if (Update.write(data, len) != len) {
+      Serial.println("OTA error: " + String(Update.errorString()));
+    }
+    
+    // Final chunk - finish update
+    if (final) {
+      if (Update.end(true)) {
+        Serial.println("OTA update successful. Rebooting...");
+      } else {
+        Serial.println("OTA error: " + String(Update.errorString()));
+      }
+    }
+  });
+  
   // Start server
-  server.begin();
+  server->begin();
   Serial.println("Web server started");
 }
 
@@ -777,4 +1228,18 @@ void loadSessions() {
   } else {
     Serial.println("Sessions file doesn't exist");
   }
+}
+
+// Function to free allocated memory
+void cleanupMemory() {
+  // Free memory
+  if (current_ssid != NULL) free(current_ssid);
+  if (current_password != NULL) free(current_password);
+  if (current_hostname != NULL) free(current_hostname);
+  if (current_username != NULL) free(current_username);
+  if (current_auth_password != NULL) free(current_auth_password);
+  if (wifi_mode != NULL) free(wifi_mode);
+  if (ap_availability != NULL) free(ap_availability);
+  if (sta_ssid != NULL) free(sta_ssid);
+  if (sta_password != NULL) free(sta_password);
 }

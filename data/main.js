@@ -17,6 +17,18 @@ document.addEventListener('DOMContentLoaded', function() {
     const yValue = document.getElementById('y-value');
     const lastMovement = document.getElementById('last-movement');
     const activityLog = document.getElementById('activity-log');
+    const nextMovementCountdown = document.getElementById('next-movement-countdown');
+    
+    // Store device info for countdown
+    let deviceInfo = {
+      lastMoveTime: 0,
+      nextMoveTime: 0,
+      uptime: 0,
+      jigglerEnabled: true
+    };
+    
+    // Countdown timer interval
+    let countdownInterval = null;
     
     // Verify all required elements exist
     if (!jigglerEnabledCheckbox || !moveIntervalInput || !movementXInput || 
@@ -64,6 +76,14 @@ document.addEventListener('DOMContentLoaded', function() {
       control.addEventListener('input', triggerAutoSave);
     });
     
+    // Special handler for jiggler enabled state
+    if (jigglerEnabledCheckbox) {
+      jigglerEnabledCheckbox.addEventListener('change', function() {
+        deviceInfo.jigglerEnabled = this.checked;
+        updateCountdownDisplay();
+      });
+    }
+    
     // Check authentication
     async function checkAuth() {
       try {
@@ -109,7 +129,10 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const config = await response.json();
         
-        if (jigglerEnabledCheckbox) jigglerEnabledCheckbox.checked = !!config.jiggler_enabled;
+        if (jigglerEnabledCheckbox) {
+          jigglerEnabledCheckbox.checked = !!config.jiggler_enabled;
+          deviceInfo.jigglerEnabled = !!config.jiggler_enabled;
+        }
         if (circularMovementCheckbox) circularMovementCheckbox.checked = !!config.circular_movement;
         if (moveIntervalInput) moveIntervalInput.value = config.move_interval || 540;
         if (movementXInput) movementXInput.value = config.movement_x || 5;
@@ -145,30 +168,98 @@ document.addEventListener('DOMContentLoaded', function() {
         
         if (response.ok) {
           const data = await response.json();
+          deviceInfo.jigglerEnabled = !!data.jiggler_enabled;
           
           if (data && data.last_move_time) {
-            // Convert timestamp to Date
-            const lastMoveDate = new Date(parseInt(data.last_move_time));
-            lastMovement.textContent = lastMoveDate.toLocaleTimeString();
+            // Get current device uptime in milliseconds
+            const uptime = data.uptime_seconds * 1000;
+            deviceInfo.uptime = uptime;
             
-            // Calculate next scheduled movement
-            if (data.next_move_time) {
-              const nextMoveDate = new Date(parseInt(data.next_move_time));
-              const now = new Date();
-              const timeDiff = nextMoveDate - now;
-              
-              if (timeDiff > 0) {
-                const minutes = Math.floor(timeDiff / 60000);
-                const seconds = Math.floor((timeDiff % 60000) / 1000);
-                addToLog(`Next movement in ${minutes}m ${seconds}s`);
-              }
+            // Store last and next move times
+            deviceInfo.lastMoveTime = data.last_move_time;
+            deviceInfo.nextMoveTime = data.next_move_time;
+            // Record time of this check
+            deviceInfo.lastCheckTime = new Date().getTime();
+            
+            // Calculate how long ago the last movement was (in milliseconds)
+            const timeSinceLastMove = uptime - data.last_move_time;
+            
+            // Format the time ago in a human-readable format
+            if (timeSinceLastMove < 60000) {
+              // Less than a minute
+              lastMovement.textContent = `${Math.floor(timeSinceLastMove / 1000)} seconds ago`;
+            } else if (timeSinceLastMove < 3600000) {
+              // Less than an hour
+              lastMovement.textContent = `${Math.floor(timeSinceLastMove / 60000)} minutes ago`;
+            } else {
+              // Hours and minutes
+              const hours = Math.floor(timeSinceLastMove / 3600000);
+              const minutes = Math.floor((timeSinceLastMove % 3600000) / 60000);
+              lastMovement.textContent = `${hours}h ${minutes}m ago`;
             }
+            
+            // Start or update countdown timer
+            updateCountdownTimer();
           } else {
             lastMovement.textContent = "No movements yet";
+            if (nextMovementCountdown) {
+              nextMovementCountdown.textContent = deviceInfo.jigglerEnabled ? "Waiting for first movement" : "Jiggler is disabled";
+            }
           }
         }
       } catch (error) {
         console.error("Status check error:", error);
+      }
+    }
+    
+    // Update countdown timer
+    function updateCountdownTimer() {
+      if (!nextMovementCountdown) return;
+      
+      // Clear any existing countdown
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+      }
+      
+      // Update countdown display immediately
+      updateCountdownDisplay();
+      
+      // Setup continuous countdown updates every second
+      countdownInterval = setInterval(updateCountdownDisplay, 1000);
+    }
+    
+    // Update countdown display
+    function updateCountdownDisplay() {
+      if (!nextMovementCountdown) return;
+      
+      // Check if jiggler is enabled
+      if (!deviceInfo.jigglerEnabled) {
+        nextMovementCountdown.textContent = "Jiggler is disabled";
+        return;
+      }
+      
+      // Calculate time until next movement
+      const now = new Date().getTime();
+      const millisSinceLastCheck = now - (deviceInfo.lastCheckTime || now);
+      const estimatedUptime = deviceInfo.uptime + millisSinceLastCheck;
+      
+      // Only proceed if we have valid next move time
+      if (!deviceInfo.nextMoveTime) {
+        nextMovementCountdown.textContent = "Waiting for next move";
+        return;
+      }
+      
+      const timeUntilNext = Math.max(0, deviceInfo.nextMoveTime - estimatedUptime);
+      
+      if (timeUntilNext > 0) {
+        const minutes = Math.floor(timeUntilNext / 60000);
+        const seconds = Math.floor((timeUntilNext % 60000) / 1000);
+        
+        // Format as MM:SS
+        const formattedTime = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        nextMovementCountdown.textContent = formattedTime;
+      } else {
+        nextMovementCountdown.textContent = "Imminent";
       }
     }
     
@@ -268,6 +359,9 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         addToLog('Configuration saved');
+        
+        // Update the countdown display after saving config
+        updateCountdownDisplay();
       } catch (error) {
         console.error("Save error:", error);
         if (saveStatus) {
@@ -294,6 +388,11 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Refresh last movement time
         setTimeout(checkLastMovement, 1000);
+        
+        // Clear any existing countdown until we get fresh data
+        if (nextMovementCountdown) {
+          nextMovementCountdown.textContent = "Refreshing...";
+        }
       } catch (error) {
         console.error("Test movement error:", error);
         showStatus(error.message, false);

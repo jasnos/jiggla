@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OTA Update - Jiggla</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <style>
+    .logo-font {
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 1px;
+    }
+    .navbar-brand {
+      font-size: 1.6rem;
+      font-weight: 700;
+    }
+    #progress-container {
+      display: none;
+    }
+  </style>
+</head>
+<body class="bg-dark">
+  <div id="loading" class="text-center mt-5">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="text-light mt-2">Loading...</p>
+  </div>
+  
+  <div id="content" class="container-fluid py-4" style="display: none;">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+      <div class="container-fluid">
+        <a class="navbar-brand logo-font" href="/">
+          <i class="bi bi-mouse2-fill"></i> JIGGLA
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link" href="/"><i class="bi bi-house-fill"></i> Dashboard</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/settings-admin.html"><i class="bi bi-gear-fill"></i> Settings</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="/ota.html"><i class="bi bi-cloud-arrow-up-fill"></i> OTA</a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <button id="logout-button" class="btn btn-sm btn-outline-light"><i class="bi bi-box-arrow-right"></i> Logout</button>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="row justify-content-center">
+      <div class="col-md-10">
+        <div class="card border-secondary">
+          <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+            <h3 class="mb-0">OTA Firmware Update</h3>
+          </div>
+          <div class="card-body">
+            <div class="alert alert-warning">
+              <i class="bi bi-exclamation-triangle-fill"></i> 
+              <strong>Warning:</strong> Updating firmware might take a few minutes. Do not power off the device during the update process.
+            </div>
+            
+            <div id="update-form" class="mb-4">
+              <form method="POST" action="/update" enctype="multipart/form-data" id="ota-form">
+                <div class="mb-3">
+                  <label class="form-label">Update Type:</label>
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="update_type" id="update-firmware" value="firmware" checked>
+                    <label class="form-check-label" for="update-firmware">
+                      Firmware
+                    </label>
+                    <div class="form-text">Update the device's firmware (program)</div>
+                  </div>
+                  <div class="form-check">
+                    <input class="form-check-input" type="radio" name="update_type" id="update-filesystem" value="filesystem">
+                    <label class="form-check-label" for="update-filesystem">
+                      Filesystem (SPIFFS)
+                    </label>
+                    <div class="form-text">Update stored files (HTML, JavaScript, CSS, etc.)</div>
+                  </div>
+                </div>
+                <div class="mb-3">
+                  <label for="firmware" class="form-label">Select Update File:</label>
+                  <input class="form-control" type="file" id="firmware" name="update" accept=".bin">
+                  <div class="form-text">Select a .bin file to upload (firmware or filesystem image)</div>
+                </div>
+                <div class="mb-3">
+                  <button type="submit" class="btn btn-primary">Update</button>
+                </div>
+              </form>
+            </div>
+            
+            <div id="progress-container" class="mb-4">
+              <h5>Upload Progress:</h5>
+              <div class="progress mb-3">
+                <div id="upload-progress" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%"></div>
+              </div>
+              <div id="progress-status" class="text-center">Preparing upload...</div>
+            </div>
+            
+            <div id="status" class="alert mt-3 d-none"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function() {
+      // Check authentication first
+      fetch('/api/auth/check', {
+        credentials: 'same-origin'
+      })
+      .then(response => {
+        if (response.status === 200) {
+          // If authenticated, show content
+          document.getElementById('loading').style.display = 'none';
+          document.getElementById('content').style.display = 'block';
+        } else {
+          // If not authenticated, redirect to login
+          window.location.href = '/login';
+        }
+      })
+      .catch(error => {
+        console.error('Authentication check failed:', error);
+        window.location.href = '/login';
+      });
+      
+      // Setup logout button
+      document.getElementById('logout-button').addEventListener('click', function() {
+        fetch('/api/auth/logout', {
+          method: 'POST',
+          credentials: 'same-origin'
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.status === 'success') {
+            window.location.href = '/login';
+          }
+        })
+        .catch(error => console.error('Logout error:', error));
+      });
+      
+      // Handle form submission with progress tracking
+      const form = document.getElementById('ota-form');
+      const progressContainer = document.getElementById('progress-container');
+      const progressBar = document.getElementById('upload-progress');
+      const progressStatus = document.getElementById('progress-status');
+      const updateForm = document.getElementById('update-form');
+      
+      form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const fileInput = document.getElementById('firmware');
+        const file = fileInput.files[0];
+        
+        if (!file) {
+          showStatus('Please select a firmware file', false);
+          return;
+        }
+        
+        // Show progress UI
+        progressContainer.style.display = 'block';
+        updateForm.style.display = 'none';
+        
+        // Get the selected update type
+        const updateType = document.querySelector('input[name="update_type"]:checked').value;
+        
+        // Create FormData
+        const formData = new FormData();
+        formData.append('update', file);
+        formData.append('update_type', updateType);
+        
+        // Create and configure request
+        const xhr = new XMLHttpRequest();
+        
+        // Setup progress tracking
+        xhr.upload.addEventListener('progress', function(e) {
+          if (e.lengthComputable) {
+            const percentComplete = (e.loaded / e.total) * 100;
+            progressBar.style.width = percentComplete + '%';
+            progressStatus.textContent = `Uploading ${updateType}: ${Math.round(percentComplete)}%`;
+          }
+        });
+        
+        // Setup completion handler
+        xhr.addEventListener('load', function() {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            progressBar.classList.remove('progress-bar-animated');
+            progressStatus.textContent = 'Update successful! Device is rebooting...';
+            showStatus(`${updateType.charAt(0).toUpperCase() + updateType.slice(1)} update complete. The device will reboot. Please wait a moment before reconnecting.`, true);
+          } else {
+            progressStatus.textContent = 'Update failed!';
+            showStatus('Error uploading: ' + xhr.statusText, false);
+            updateForm.style.display = 'block';
+          }
+        });
+        
+        // Setup error handler
+        xhr.addEventListener('error', function() {
+          progressStatus.textContent = 'Connection error!';
+          showStatus('Connection error during upload', false);
+          updateForm.style.display = 'block';
+        });
+        
+        // Send the request
+        xhr.open('POST', '/update');
+        xhr.send(formData);
+      });
+      
+      function showStatus(message, success) {
+        const statusDiv = document.getElementById('status');
+        statusDiv.textContent = message;
+        statusDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
+        statusDiv.classList.add(success ? 'alert-success' : 'alert-danger');
+      }
+    });
+  </script>
+</body>
+</html> 
