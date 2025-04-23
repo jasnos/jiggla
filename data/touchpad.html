@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mouse Control - Jiggla</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <style>
+    .logo-font {
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 1px;
+    }
+    .navbar-brand {
+      font-size: 1.6rem;
+      font-weight: 700;
+    }
+    #touchpad-container {
+      max-width: 500px;
+      margin: 0 auto;
+    }
+    #touchpad {
+      width: 100%;
+      height: 300px;
+      background-color: #2c3034;
+      border: 2px solid #495057;
+      border-radius: 8px;
+      position: relative;
+      cursor: pointer;
+      touch-action: none;
+      overflow: hidden;
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+    }
+    #cursor-indicator {
+      width: 10px;
+      height: 10px;
+      background-color: rgba(255, 255, 255, 0.7);
+      border-radius: 50%;
+      position: absolute;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      display: none;
+    }
+    .mouse-buttons {
+      display: flex;
+      margin-top: 10px;
+      border: 2px solid #495057;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .mouse-btn {
+      flex: 1;
+      padding: 15px 0;
+      background-color: #2c3034;
+      border: none;
+      color: #fff;
+      font-weight: bold;
+      transition: background-color 0.2s;
+    }
+    .mouse-btn:active {
+      background-color: #0d6efd;
+    }
+    .mouse-btn.active {
+      background-color: #0d6efd;
+    }
+    .mouse-btn:first-child {
+      border-right: 1px solid #495057;
+    }
+    .mouse-btn:last-child {
+      border-left: 1px solid #495057;
+    }
+    .sensitivity-slider {
+      margin-top: 20px;
+    }
+    .scroll-controls {
+      display: flex;
+      margin-top: 10px;
+      gap: 10px;
+    }
+    .scroll-btn {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      background-color: #2c3034;
+      border: 2px solid #495057;
+      border-radius: 8px;
+      color: #fff;
+    }
+    .scroll-btn:active {
+      background-color: #0d6efd;
+    }
+    /* Add scroll indicators */
+    @keyframes scrollPulse {
+      0% { opacity: 0.2; }
+      50% { opacity: 1; }
+      100% { opacity: 0.2; }
+    }
+    .scroll-btn.active {
+      background-color: #0d6efd;
+      animation: scrollPulse 0.6s infinite;
+    }
+    body {
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+    }
+    .disabled-container {
+      opacity: 0.6;
+      pointer-events: none;
+      filter: grayscale(0.8);
+      transition: all 0.3s ease;
+    }
+    .enabled-container {
+      opacity: 1;
+      pointer-events: auto;
+      filter: none;
+      transition: all 0.3s ease;
+    }
+  </style>
+</head>
+<body class="bg-dark">
+  <div id="loading" class="text-center mt-5">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="text-light mt-2">Loading...</p>
+  </div>
+  
+  <div id="content" class="container-fluid py-4" style="display: none;">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+      <div class="container-fluid">
+        <a class="navbar-brand logo-font" href="/">
+          <i class="bi bi-mouse3"></i> JIGGLA
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link" href="/"><i class="bi bi-cursor-fill"></i> Mouse jiggler</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="/touchpad.html"><i class="bi bi-hand-index-thumb-fill"></i> Remote Touchpad</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/settings-admin.html"><i class="bi bi-gear-fill"></i> Admin Settings</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/ota.html"><i class="bi bi-cloud-arrow-up-fill"></i> OTA Update</a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <button id="logout-button" class="btn btn-sm btn-outline-light"><i class="bi bi-box-arrow-right"></i> Logout</button>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
+
+    <div class="row justify-content-center">
+      <div class="col-md-10">
+        <div class="card border-secondary">
+          <div class="card-header bg-primary text-white">
+            <h3 class="mb-0">Remote Mouse Control <span class="badge bg-warning text-dark">EXPERIMENTAL</span></h3>
+          </div>
+          <div class="card-body">
+            <div class="form-check form-switch mb-3">
+              <input class="form-check-input" type="checkbox" role="switch" id="touchpad-enabled" aria-describedby="touchpad-enabled-help">
+              <label class="form-check-label" for="touchpad-enabled">Enable touchpad functionality</label>
+              <div id="touchpad-enabled-help" class="form-text">This feature is in beta. Enable only if you want to test it.</div>
+            </div>
+            
+            <div id="touchpad-container" class="disabled-container">
+              <div id="touchpad" ontouchmove="event.preventDefault();" onmousemove="event.preventDefault();">
+                <div id="cursor-indicator"></div>
+              </div>
+              
+              <div class="mouse-buttons">
+                <button class="mouse-btn" id="left-click">Left Click</button>
+                <button class="mouse-btn" id="right-click">Right Click</button>
+              </div>
+              
+              <div class="scroll-controls">
+                <button class="scroll-btn" id="scroll-up"><i class="bi bi-arrow-up"></i> Scroll Up</button>
+                <button class="scroll-btn" id="scroll-down"><i class="bi bi-arrow-down"></i> Scroll Down</button>
+              </div>
+              
+              <div class="sensitivity-slider mt-4">
+                <label for="sensitivity" class="form-label">Sensitivity</label>
+                <input type="range" class="form-range" id="sensitivity" min="1" max="20" step="1" value="10">
+                <div class="d-flex justify-content-between">
+                  <small>Low</small>
+                  <small>Medium</small>
+                  <small>High</small>
+                </div>
+              </div>
+            </div>
+            
+            <div class="alert alert-info mt-4">
+              <i class="bi bi-info-circle-fill"></i> Touch and drag on the trackpad area to move the mouse cursor. Use the buttons below for clicking.
+              <ul class="mb-0 mt-2">
+                <li>The touchpad area is for mouse movement only</li>
+                <li>Use the Left Click and Right Click buttons for clicking operations</li>
+                <li>Press and hold the Left Click button while moving on the touchpad to drag items</li>
+                <li>Use the Scroll buttons to scroll up and down</li>
+              </ul>
+            </div>
+            
+            <div id="status" class="alert mt-3 d-none"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/touchpad.js"></script>
+</body>
+</html> 

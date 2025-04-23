@@ -19,6 +19,11 @@
 #include <math.h>
 #include <Update.h>
 
+// Define a simpler debug approach for ESP32-S2/S3 in USB mode
+// In this mode, we don't have Serial, so we use a no-op debug for now
+#define DEBUG(x) do {} while(0)
+#define DEBUGF(x, ...) do {} while(0)
+
 // Include credentials (not tracked by git)
 #include "../credentials.h"
 
@@ -50,14 +55,17 @@ char* sta_password = strdup(preferred_password);
 
 // Default mouse movement settings
 int move_interval = 4 * 60 * 1000; // 4 minutes in milliseconds
-int movement_x = 5;
-int movement_y = 5;
-int movement_speed = 10; // Default movement speed in milliseconds
+int movement_size = 5; // Default movement size (replaces separate X and Y)
+int movement_speed = 2000; // Total milliseconds for a complete movement pattern (1-3000 range)
 bool jiggler_enabled = true; // Default state is enabled
-bool circular_movement = false; // Default to linear movement
+char* movement_pattern = strdup("linear"); // Default movement pattern
 bool random_delay = false; // Randomize delay between movements
 bool movement_trail = false; // Create a movement trail
-const int CIRCLE_STEPS = 36; // Number of steps to complete a circle
+const int CIRCLE_STEPS = 100; // Number of steps to complete a circle (increased for smoothness)
+const int LINE_STEPS = 50;    // Number of steps for a straight line
+const int RECT_STEPS = 200;   // Number of steps for rectangle (50 per side)
+const int TRIANGLE_STEPS = 150; // Number of steps for triangle (50 per side)
+const int ZIGZAG_STEPS = 150;  // Number of steps for zig-zag
 
 // File paths
 const char* config_file = "/config.json";
@@ -96,6 +104,13 @@ int ap_timeout = 5; // minutes
 unsigned long ap_start_time = 0; // When AP was started
 bool ap_active = true; // Is AP currently active
 
+// Tracking variables for mouse position
+int totalDisplacementX = 0;
+int totalDisplacementY = 0;
+
+// Add this near the top with other global variables
+bool auth_enabled = true; // Default to true for backward compatibility
+
 // Function prototypes
 void loadConfig();
 void saveConfig();
@@ -110,26 +125,42 @@ void initSPIFFS();
 void cleanupExpiredSessions();
 void moveMouseLinear();
 void moveMouseCircular();
+void moveMouseRectangle();
+void moveMouseTriangle();
+void moveMouseZigzag();
 unsigned long calculateMoveInterval();
 void moveMouse();
 void saveSessions();
 void loadSessions();
 void cleanupMemory();
+void resetCursorPosition();
+
+// Function to scale movement size based on slider value
+int scaleMovementSize(int rawSize) {
+  // Scale the raw size (1-200) to appropriate pixel values
+  if (rawSize <= 33) {
+    // Small movements: 20-50 pixels
+    return 20 + (rawSize * 30 / 33);
+  } else if (rawSize <= 66) {
+    // Medium movements: 100-200 pixels
+    return 100 + ((rawSize - 33) * 100 / 33);
+  } else {
+    // Large movements: 250-500 pixels
+    return 250 + ((rawSize - 66) * 250 / 134);
+  }
+}
 
 void setup() {
-  // Initialize serial for debugging
-  Serial.begin(115200);
-  delay(500);
-  Serial.println("\nStarting jiggla");
-
-  // Initialize USB with custom VID/PID to appear as a branded mouse
-  // Logitech VID: 0x046d, Mouse PID: 0xc077 (M105 Optical Mouse)
+  // Initialize USB for both mouse and Serial
   USB.VID(0x046d);
   USB.PID(0xc077);
   USB.manufacturerName("Logitech");
   USB.productName("M105 Optical Mouse");
   USB.begin();
   
+  delay(500);
+  DEBUG("\nStarting jiggla");
+
   // Initialize file system
   initSPIFFS();
   
@@ -163,13 +194,16 @@ void setup() {
   // Setup RNG for session IDs
   randomSeed(micros());
   
-  Serial.println("jiggla ready");
+  DEBUG("jiggla ready");
 }
 
 void loop() {
   // Check if it's time to move the mouse and if jiggler is enabled
   if (jiggler_enabled && millis() - last_move_time >= calculateMoveInterval()) {
-    Serial.println("Moving mouse");
+    DEBUG("Moving mouse");
+    
+    // Reset cursor position to original position before starting new movement
+    resetCursorPosition();
     
     // Perform the movement
     moveMouse();
@@ -186,13 +220,19 @@ void loop() {
     unsigned long ap_elapsed_minutes = (millis() - ap_start_time) / 60000;
     
     if (ap_elapsed_minutes >= ap_timeout) {
-      Serial.println("AP timeout reached, turning off WiFi");
-      
-      // Turn off WiFi
-      WiFi.mode(WIFI_OFF);
-      ap_active = false;
-      
-      Serial.println("WiFi turned off, device will continue as USB mouse jiggler only");
+      if (strcmp(wifi_mode, "apsta") == 0) {
+        // In AP+STA mode, only turn off the AP part, keep STA running
+        DEBUG("AP timeout reached, turning off AP but keeping station mode");
+        WiFi.mode(WIFI_STA);
+        ap_active = false;
+        DEBUG("AP turned off, device will continue in station mode");
+      } else {
+        // In AP-only mode, turn off WiFi completely
+        DEBUG("AP timeout reached, turning off WiFi completely");
+        WiFi.mode(WIFI_OFF);
+        ap_active = false;
+        DEBUG("WiFi turned off, device will continue as USB mouse jiggler only");
+      }
     }
   }
   
@@ -205,44 +245,505 @@ void loop() {
 }
 
 void moveMouseLinear() {
-  // Move to point B
-  Mouse.move(movement_x, movement_y);
-  delay(movement_speed);
+  // Track actual movement
+  int totalDeltaX = 0;
+  int totalDeltaY = 0;
   
-  // Move back to point A
-  Mouse.move(-movement_x, -movement_y);
+  // Calculate delay between steps to achieve the desired total movement time
+  int stepDelay = movement_speed / (LINE_STEPS * 2); // * 2 for round trip
+  
+  // Scale the movement size
+  int scaledSize = scaleMovementSize(movement_size);
+  
+  // Move from origin to end point smoothly
+  for (int i = 0; i < LINE_STEPS; i++) {
+    // Calculate the step size for this iteration
+    float progress = (float)i / (LINE_STEPS - 1); // 0.0 to 1.0
+    int targetX = round(scaledSize * progress);
+    int targetY = 0; // Linear movement is horizontal by default
+    
+    // Calculate delta from last position
+    int deltaX = targetX - totalDeltaX;
+    int deltaY = targetY - totalDeltaY;
+    
+    // Move to this position
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Move back to origin smoothly
+  for (int i = LINE_STEPS - 1; i >= 0; i--) {
+    // Calculate the step size for this iteration
+    float progress = (float)i / (LINE_STEPS - 1); // 1.0 to 0.0
+    int targetX = round(scaledSize * progress);
+    int targetY = 0;
+    
+    // Calculate delta from last position
+    int deltaX = targetX - totalDeltaX;
+    int deltaY = targetY - totalDeltaY;
+    
+    // Move to this position
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Final compensation if there's any drift
+  if (totalDeltaX != 0 || totalDeltaY != 0) {
+    Mouse.move(-totalDeltaX, -totalDeltaY);
+    
+    // Update global tracking
+    totalDisplacementX -= totalDeltaX;
+    totalDisplacementY -= totalDeltaY;
+    
+    DEBUGF("Linear compensation: (%d, %d)", -totalDeltaX, -totalDeltaY);
+  }
 }
 
 void moveMouseCircular() {
-  // Calculate radius based on X and Y values
-  float radius = sqrt(movement_x * movement_x + movement_y * movement_y);
+  // Calculate radius based on scaled movement size
+  float radius = scaleMovementSize(movement_size);
+  
+  // Calculate delay between steps to achieve the desired total movement time
+  int stepDelay = movement_speed / CIRCLE_STEPS;
+  
+  // Track total movement to ensure we return to start position
+  int totalDeltaX = 0;
+  int totalDeltaY = 0;
+  int lastX = 0;
+  int lastY = 0;
   
   // Draw a circle by moving in small increments
-  for (int i = 0; i < CIRCLE_STEPS; i++) {
+  for (int i = 0; i <= CIRCLE_STEPS; i++) {
     // Calculate position on the circle
     float angle = 2 * PI * i / CIRCLE_STEPS;
     int x = round(radius * cos(angle));
     int y = round(radius * sin(angle));
     
-    // Move to this position
-    Mouse.move(x, y);
-    delay(movement_speed); // Use configured movement speed
+    // Calculate the delta movement from last position
+    int deltaX = x - lastX;
+    int deltaY = y - lastY;
+    
+    // Only move if there's an actual change to avoid unnecessary moves
+    if (deltaX != 0 || deltaY != 0) {
+      // Move to this position
+      Mouse.move(deltaX, deltaY);
+      
+      // Keep track of our movement
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update last position
+      lastX = x;
+      lastY = y;
+    }
+    
+    delay(stepDelay);
   }
   
-  // Return to starting position
-  Mouse.move(-movement_x, -movement_y);
+  // Return to exact starting position by inverting all accumulated movement
+  if (totalDeltaX != 0 || totalDeltaY != 0) {
+    Mouse.move(-totalDeltaX, -totalDeltaY);
+    
+    // Update global tracking
+    totalDisplacementX -= totalDeltaX;
+    totalDisplacementY -= totalDeltaY;
+    
+    DEBUGF("Circular compensation: (%d, %d)", -totalDeltaX, -totalDeltaY);
+  }
+}
+
+void moveMouseRectangle() {
+  // Track total movement
+  int totalDeltaX = 0;
+  int totalDeltaY = 0;
+  
+  // Scale the movement size
+  int scaledSize = scaleMovementSize(movement_size);
+  
+  // Define rectangle dimensions
+  int width = scaledSize;
+  int height = scaledSize * 0.75; // Make height 75% of width for better appearance
+  
+  // Calculate delay between steps to achieve the desired total movement time
+  int stepsPerSide = RECT_STEPS / 4; // 4 sides
+  int stepDelay = movement_speed / RECT_STEPS;
+  
+  // Current position
+  int currentX = 0;
+  int currentY = 0;
+  
+  // Draw a rectangle with smooth edges
+  
+  // Side 1: Move right
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = round(width * progress);
+    int targetY = 0;
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Side 2: Move down
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = width;
+    int targetY = round(height * progress);
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Side 3: Move left
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = width - round(width * progress);
+    int targetY = height;
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Side 4: Move up (completing the rectangle)
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = 0;
+    int targetY = height - round(height * progress);
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Return to exact starting position if there's any drift
+  if (totalDeltaX != 0 || totalDeltaY != 0) {
+    Mouse.move(-totalDeltaX, -totalDeltaY);
+    totalDisplacementX -= totalDeltaX;
+    totalDisplacementY -= totalDeltaY;
+    DEBUGF("Rectangle compensation: (%d, %d)", -totalDeltaX, -totalDeltaY);
+  }
+}
+
+void moveMouseTriangle() {
+  // Track total movement
+  int totalDeltaX = 0;
+  int totalDeltaY = 0;
+  
+  // Scale the movement size
+  int scaledSize = scaleMovementSize(movement_size);
+  
+  // Triangle dimensions based on scaled movement size
+  int side = scaledSize;
+  float height = side * 0.866; // Height of equilateral triangle (side * sin(60°))
+  
+  // Calculate delay between steps to achieve the desired total movement time
+  int stepsPerSide = TRIANGLE_STEPS / 3; // 3 sides
+  int stepDelay = movement_speed / TRIANGLE_STEPS;
+  
+  // Current position
+  int currentX = 0;
+  int currentY = 0;
+  
+  // Draw a triangle with smooth edges
+  
+  // Side 1: Move down-right
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = round((side/2) * progress);
+    int targetY = round(height * progress);
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Side 2: Move left
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = round(side/2 - side * progress);
+    int targetY = round(height);
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Side 3: Move up-right (back to start)
+  for (int i = 0; i <= stepsPerSide; i++) {
+    float progress = (float)i / stepsPerSide;
+    int targetX = round(-side/2 + (side/2) * progress);
+    int targetY = round(height - height * progress);
+    
+    // Calculate delta from last position
+    int deltaX = targetX - currentX;
+    int deltaY = targetY - currentY;
+    
+    if (deltaX != 0 || deltaY != 0) {
+      Mouse.move(deltaX, deltaY);
+      
+      // Update tracking
+      totalDeltaX += deltaX;
+      totalDeltaY += deltaY;
+      
+      // Update global tracking
+      totalDisplacementX += deltaX;
+      totalDisplacementY += deltaY;
+      
+      // Update current position
+      currentX = targetX;
+      currentY = targetY;
+    }
+    
+    delay(stepDelay);
+  }
+  
+  // Return to exact starting position if there's any drift
+  if (totalDeltaX != 0 || totalDeltaY != 0) {
+    Mouse.move(-totalDeltaX, -totalDeltaY);
+    totalDisplacementX -= totalDeltaX;
+    totalDisplacementY -= totalDeltaY;
+    DEBUGF("Triangle compensation: (%d, %d)", -totalDeltaX, -totalDeltaY);
+  }
+}
+
+void moveMouseZigzag() {
+  // Track total movement
+  int totalDeltaX = 0;
+  int totalDeltaY = 0;
+  
+  // Scale the movement size
+  int scaledSize = scaleMovementSize(movement_size);
+  
+  // Define zigzag dimensions
+  int width = scaledSize / 2;
+  int height = scaledSize / 3;
+  int zigCount = 3; // Number of zigs and zags
+  
+  // Calculate delay between steps to achieve the desired total movement time
+  int stepsPerZig = ZIGZAG_STEPS / (zigCount * 2); // Each zig and zag
+  int stepDelay = movement_speed / ZIGZAG_STEPS;
+  
+  // Current position
+  int currentX = 0;
+  int currentY = 0;
+  
+  // Draw a zigzag pattern
+  for (int z = 0; z < zigCount; z++) {
+    // Zig - move diagonally down and right
+    for (int i = 0; i <= stepsPerZig; i++) {
+      float progress = (float)i / stepsPerZig;
+      int targetX = currentX + round(width * progress);
+      int targetY = currentY + round(height * progress);
+      
+      // Calculate delta from last position
+      int deltaX = targetX - currentX;
+      int deltaY = targetY - currentY;
+      
+      if (deltaX != 0 || deltaY != 0) {
+        Mouse.move(deltaX, deltaY);
+        
+        // Update tracking
+        totalDeltaX += deltaX;
+        totalDeltaY += deltaY;
+        
+        // Update global tracking
+        totalDisplacementX += deltaX;
+        totalDisplacementY += deltaY;
+        
+        // Update current position
+        currentX = targetX;
+        currentY = targetY;
+      }
+      
+      delay(stepDelay);
+    }
+    
+    // Zag - move diagonally up and right
+    for (int i = 0; i <= stepsPerZig; i++) {
+      float progress = (float)i / stepsPerZig;
+      int targetX = currentX + round(width * progress);
+      int targetY = currentY - round(height * progress);
+      
+      // Calculate delta from last position
+      int deltaX = targetX - currentX;
+      int deltaY = targetY - currentY;
+      
+      if (deltaX != 0 || deltaY != 0) {
+        Mouse.move(deltaX, deltaY);
+        
+        // Update tracking
+        totalDeltaX += deltaX;
+        totalDeltaY += deltaY;
+        
+        // Update global tracking
+        totalDisplacementX += deltaX;
+        totalDisplacementY += deltaY;
+        
+        // Update current position
+        currentX = targetX;
+        currentY = targetY;
+      }
+      
+      delay(stepDelay);
+    }
+  }
+  
+  // Return to start position
+  if (totalDeltaX != 0 || totalDeltaY != 0) {
+    Mouse.move(-totalDeltaX, -totalDeltaY);
+    totalDisplacementX -= totalDeltaX;
+    totalDisplacementY -= totalDeltaY;
+    DEBUGF("Zigzag compensation: (%d, %d)", -totalDeltaX, -totalDeltaY);
+  }
 }
 
 void initSPIFFS() {
   if (!SPIFFS.begin(true)) {
-    Serial.println("An error occurred while mounting SPIFFS");
+    DEBUG("An error occurred while mounting SPIFFS");
     return;
   }
-  Serial.println("SPIFFS mounted successfully");
+  DEBUG("SPIFFS mounted successfully");
 }
 
 void loadConfig() {
-  Serial.println("Loading configuration");
+  DEBUG("Loading configuration");
   
   if (SPIFFS.exists(config_file)) {
     File file = SPIFFS.open(config_file, "r");
@@ -252,55 +753,79 @@ void loadConfig() {
       
       if (!error) {
         move_interval = doc["move_interval"] | move_interval;
-        movement_x = doc["movement_x"] | movement_x;
-        movement_y = doc["movement_y"] | movement_y;
+        
+        // Handle movement pattern
+        if (doc.containsKey("movement_pattern")) {
+          if (movement_pattern != NULL) free(movement_pattern);
+          movement_pattern = strdup(doc["movement_pattern"].as<const char*>());
+        } else {
+          // Legacy compatibility - use circular_movement to determine pattern
+          bool circular = doc["circular_movement"] | false;
+          if (movement_pattern != NULL) free(movement_pattern);
+          movement_pattern = strdup(circular ? "circular" : "linear");
+        }
+        
+        // Handle movement size (new) or fall back to X/Y values
+        if (doc.containsKey("movement_size")) {
+          movement_size = doc["movement_size"] | movement_size;
+        } else {
+          // Legacy - use max of X and Y for size
+          int movement_x = doc["movement_x"] | 5;
+          int movement_y = doc["movement_y"] | 5;
+          movement_size = max(abs(movement_x), abs(movement_y));
+        }
+        
         movement_speed = doc["movement_speed"] | movement_speed;
         jiggler_enabled = doc["jiggler_enabled"] | jiggler_enabled;
-        circular_movement = doc["circular_movement"] | circular_movement;
         random_delay = doc["random_delay"] | random_delay;
         movement_trail = doc["movement_trail"] | movement_trail;
         
-        Serial.println("Configuration loaded successfully");
+        DEBUG("Configuration loaded successfully");
       } else {
-        Serial.println("Failed to deserialize config");
+        DEBUG("Failed to deserialize config");
       }
       
       file.close();
     }
   } else {
-    Serial.println("Config file doesn't exist, using defaults");
+    DEBUG("Config file doesn't exist, using defaults");
     saveConfig();
   }
 }
 
 void saveConfig() {
-  Serial.println("Saving configuration");
+  DEBUG("Saving configuration");
   
   StaticJsonDocument<512> doc;
   doc["move_interval"] = move_interval;
-  doc["movement_x"] = movement_x;
-  doc["movement_y"] = movement_y;
+  doc["movement_pattern"] = movement_pattern;
+  doc["movement_size"] = movement_size;
   doc["movement_speed"] = movement_speed;
   doc["jiggler_enabled"] = jiggler_enabled;
-  doc["circular_movement"] = circular_movement;
+  
+  // Legacy compatibility
+  doc["circular_movement"] = (strcmp(movement_pattern, "circular") == 0);
+  doc["movement_x"] = movement_size;
+  doc["movement_y"] = movement_size;
+  
   doc["random_delay"] = random_delay;
   doc["movement_trail"] = movement_trail;
   
   File file = SPIFFS.open(config_file, "w");
   if (file) {
     if (serializeJson(doc, file) == 0) {
-      Serial.println("Failed to write config");
+      DEBUG("Failed to write config");
     } else {
-      Serial.println("Configuration saved successfully");
+      DEBUG("Configuration saved successfully");
     }
     file.close();
   } else {
-    Serial.println("Failed to open config file for writing");
+    DEBUG("Failed to open config file for writing");
   }
 }
 
 void loadSettings() {
-  Serial.println("Loading settings");
+  DEBUG("Loading settings");
   
   if (SPIFFS.exists(settings_file)) {
     File file = SPIFFS.open(settings_file, "r");
@@ -360,6 +885,7 @@ void loadSettings() {
         
         // Load auth settings
         if (doc.containsKey("auth")) {
+          auth_enabled = doc["auth"].containsKey("enabled") ? doc["auth"]["enabled"].as<bool>() : true;
           if (doc["auth"].containsKey("username")) {
             if (current_username != NULL) free(current_username);
             current_username = strdup(doc["auth"]["username"].as<const char*>());
@@ -375,21 +901,21 @@ void loadSettings() {
           current_webport = doc["web_port"].as<int>();
         }
         
-        Serial.println("Settings loaded successfully");
+        DEBUG("Settings loaded successfully");
       } else {
-        Serial.println("Failed to deserialize settings");
+        DEBUG("Failed to deserialize settings");
       }
       
       file.close();
     }
   } else {
-    Serial.println("Settings file doesn't exist, using defaults");
+    DEBUG("Settings file doesn't exist, using defaults");
     saveSettings();
   }
 }
 
 void saveSettings() {
-  Serial.println("Saving settings");
+  DEBUG("Saving settings");
   
   StaticJsonDocument<512> doc;
   
@@ -414,6 +940,7 @@ void saveSettings() {
   
   // Auth settings
   JsonObject auth = doc.createNestedObject("auth");
+  auth["enabled"] = auth_enabled;
   auth["username"] = current_username;
   auth["password"] = current_auth_password;
   
@@ -423,24 +950,24 @@ void saveSettings() {
   File file = SPIFFS.open(settings_file, "w");
   if (file) {
     if (serializeJson(doc, file) == 0) {
-      Serial.println("Failed to write settings");
+      DEBUG("Failed to write settings");
     } else {
-      Serial.println("Settings saved successfully");
+      DEBUG("Settings saved successfully");
     }
     file.close();
   } else {
-    Serial.println("Failed to open settings file for writing");
+    DEBUG("Failed to open settings file for writing");
   }
 }
 
 void setupWiFi() {
-  Serial.println("Setting up WiFi");
+  DEBUG("Setting up WiFi");
   ap_start_time = millis(); // Record the time AP is started
   ap_active = true;
   
   if (strcmp(wifi_mode, "apsta") == 0) {
     // AP+STA mode
-    Serial.println("Setting up WiFi in AP+STA mode");
+    DEBUG("Setting up WiFi in AP+STA mode");
     
     // Start in AP+STA mode
     WiFi.mode(WIFI_AP_STA);
@@ -449,58 +976,58 @@ void setupWiFi() {
     WiFi.softAPConfig(default_ip, default_ip, IPAddress(255, 255, 255, 0));
     WiFi.softAP(current_ssid, current_password, 1, ap_hidden);
     
-    Serial.print("AP IP address: ");
-    Serial.println(WiFi.softAPIP());
+    DEBUGF("AP IP address: %s", WiFi.softAPIP().toString().c_str());
+    
+    // Set hostname before connecting to WiFi
+    WiFi.setHostname(current_hostname);
     
     // Try to connect to the preferred STA network
     WiFi.begin(sta_ssid, sta_password);
     
-    Serial.print("Connecting to WiFi network: ");
-    Serial.println(sta_ssid);
+    DEBUG("Connecting to WiFi network: ");
+    DEBUG(sta_ssid);
     
     // Wait for connection with timeout
     unsigned long startAttemptTime = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < wifi_connect_timeout) {
       delay(500);
-      Serial.print(".");
+      DEBUG(".");
     }
-    Serial.println();
+    DEBUG("\n");
     
     if (WiFi.status() == WL_CONNECTED) {
       // Successfully connected to preferred network
-      Serial.print("Connected to WiFi network. IP address: ");
-      Serial.println(WiFi.localIP());
+      DEBUGF("Connected to WiFi network. IP address: %s", WiFi.localIP().toString().c_str());
       isAPMode = false;
     } else {
-      Serial.println("Failed to connect to preferred network, but AP is still active.");
+      DEBUG("Failed to connect to preferred network, but AP is still active.");
       isAPMode = true;
     }
   } else {
     // AP Only mode
-    Serial.println("Setting up WiFi in AP Only mode");
+    DEBUG("Setting up WiFi in AP Only mode");
     
     WiFi.mode(WIFI_AP);
     WiFi.softAPConfig(default_ip, default_ip, IPAddress(255, 255, 255, 0));
     WiFi.softAP(current_ssid, current_password, 1, ap_hidden);
     
-    Serial.print("AP IP address: ");
-    Serial.println(WiFi.softAPIP());
+    DEBUGF("AP IP address: %s", WiFi.softAPIP().toString().c_str());
     
     isAPMode = true;
   }
   
   // Setup mDNS
   if (!MDNS.begin(current_hostname)) {
-    Serial.println("Error setting up mDNS responder!");
+    DEBUG("Error setting up mDNS responder!");
   } else {
-    Serial.println("mDNS responder started");
+    DEBUG("mDNS responder started");
     MDNS.addService("http", "tcp", current_webport);
     MDNS.addService("jiggla", "tcp", current_webport);
   }
 }
 
 void setupAccessPoint() {
-  Serial.println("Setting up Access Point");
+  DEBUG("Setting up Access Point");
   
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(default_ip, default_ip, IPAddress(255, 255, 255, 0));
@@ -508,13 +1035,12 @@ void setupAccessPoint() {
   // Use the hidden parameter if enabled
   WiFi.softAP(current_ssid, current_password, 1, ap_hidden);
   
-  Serial.print("AP IP address: ");
-  Serial.println(WiFi.softAPIP());
+  DEBUGF("AP IP address: %s", WiFi.softAPIP().toString().c_str());
   
   if (!MDNS.begin(current_hostname)) {
-    Serial.println("Error setting up mDNS responder!");
+    DEBUG("Error setting up mDNS responder!");
   } else {
-    Serial.println("mDNS responder started");
+    DEBUG("mDNS responder started");
     MDNS.addService("http", "tcp", current_webport);
     MDNS.addService("jiggla", "tcp", current_webport);
   }
@@ -534,8 +1060,34 @@ String generateSessionId() {
 }
 
 bool validateSession(AsyncWebServerRequest *request) {
+  // If authentication is disabled, always return true
+  if (!auth_enabled) {
+    return true;
+  }
+  
+  DEBUG("Validating session");
+  DEBUGF("Request URL: %s, Host: %s", request->url().c_str(), request->host().c_str());
+  
+  // Check if we're being accessed on a port other than the configured one
+  String hostWithPort = request->host();
+  int colonPos = hostWithPort.indexOf(':');
+  if (colonPos != -1) {
+    String portStr = hostWithPort.substring(colonPos + 1);
+    int port = portStr.toInt();
+    DEBUGF("Request port: %d, Configured port: %d", port, current_webport);
+    
+    // If the port doesn't match our configured port, we might need to save it
+    if (port != current_webport && port > 0) {
+      DEBUGF("Detected access on non-standard port %d, updating config", port);
+      current_webport = port;
+      saveSettings();
+    }
+  }
+  
   if (request->hasHeader("Cookie")) {
     String cookie = request->header("Cookie");
+    DEBUGF("Cookie header: %s", cookie.c_str());
+    
     int sessionIndex = cookie.indexOf("session=");
     
     if (sessionIndex != -1) {
@@ -549,12 +1101,14 @@ bool validateSession(AsyncWebServerRequest *request) {
         sessionId = cookie.substring(sessionIndex, endIndex);
       }
       
+      DEBUGF("Found session ID: %s", sessionId.c_str());
+      
       // Find session
       for (int i = 0; i < MAX_SESSIONS; i++) {
         if (sessions[i].active && sessions[i].id == sessionId) {
           // Check if session is expired
           // Handle millis() overflow by using subtraction which works correctly even across overflow
-          if ((long)(millis() - sessions[i].expiry) < 0) {
+          if ((long)(sessions[i].expiry - millis()) > 0) {
             // Update expiry time
             sessions[i].expiry = millis() + session_timeout;
             
@@ -565,9 +1119,13 @@ bool validateSession(AsyncWebServerRequest *request) {
               last_save = millis();
             }
             
+            DEBUGF("Session validated: id=%s, expiry=%lu, current=%lu", 
+                         sessionId.c_str(), sessions[i].expiry, millis());
             return true;
           } else {
             // Session expired
+            DEBUGF("Session expired: id=%s, expiry=%lu, current=%lu", 
+                         sessionId.c_str(), sessions[i].expiry, millis());
             sessions[i].active = false;
             saveSessions(); // Save the change
             return false;
@@ -591,15 +1149,14 @@ void cleanupExpiredSessions() {
 }
 
 void setupWebServer() {
-  Serial.println("Setting up web server");
+  DEBUG("Setting up web server");
   
   // Route to serve static files
   server->serveStatic("/", SPIFFS, "/");
   
   // Redirect all requests to login page if not authenticated
   server->onNotFound([](AsyncWebServerRequest *request) {
-    Serial.print("Unhandled request for URL: ");
-    Serial.println(request->url());
+    DEBUGF("Unhandled request for URL: %s", request->url().c_str());
     
     if (!validateSession(request)) {
       request->redirect("/login");
@@ -610,13 +1167,13 @@ void setupWebServer() {
   
   // Serve main page (only if authenticated)
   server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    Serial.println("Received request for main page");
+    DEBUG("Received request for main page");
     
     if (validateSession(request)) {
-      Serial.println("Session is valid, serving index.html from SPIFFS");
+      DEBUG("Session is valid, serving index.html from SPIFFS");
       request->send(SPIFFS, "/index.html", "text/html");
     } else {
-      Serial.println("Invalid session, redirecting to login");
+      DEBUG("Invalid session, redirecting to login");
       request->redirect("/login");
     }
   });
@@ -626,7 +1183,7 @@ void setupWebServer() {
     if (validateSession(request)) {
       request->redirect("/");
     } else {
-      Serial.println("Serving login.html from SPIFFS");
+      DEBUG("Serving login.html from SPIFFS");
       request->send(SPIFFS, "/login.html", "text/html");
     }
   });
@@ -643,9 +1200,19 @@ void setupWebServer() {
   
   // API endpoint to check authentication
   server->on("/api/auth/check", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Auth check request received");
+    
+    // Debug: Print all headers to see if the cookie is present
+    int headers = request->headers();
+    for(int i=0; i<headers; i++) {
+      DEBUGF("Header[%s]: %s", request->headerName(i).c_str(), request->header(i).c_str());
+    }
+    
     if (validateSession(request)) {
+      DEBUG("Auth check passed");
       request->send(200, "application/json", "{\"status\":\"authenticated\"}");
     } else {
+      DEBUG("Auth check failed");
       request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
     }
   });
@@ -694,14 +1261,26 @@ void setupWebServer() {
           
           // Set cookie
           AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\":\"success\"}");
-          response->addHeader("Set-Cookie", "session=" + sessionId + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=" + String(session_timeout / 1000));
+          
+          // Construct a more robust cookie - use the host from the request
+          String host = request->host();
+          int colonPos = host.indexOf(':');
+          if (colonPos != -1) {
+            host = host.substring(0, colonPos); // Remove port if present
+          }
+          
+          // Set the cookie with improved attributes
+          String cookieHeader = "session=" + sessionId + 
+                               "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + String(session_timeout / 1000);
+          
+          response->addHeader("Set-Cookie", cookieHeader);
           request->send(response);
-          Serial.println("Login successful for user: " + username);
+          DEBUG("Login successful for user: " + username);
         } else {
           request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"No session slots available\"}");
         }
       } else {
-        Serial.println("Login failed: Invalid credentials");
+        DEBUG("Login failed: Invalid credentials");
         request->send(401, "application/json", "{\"status\":\"error\",\"message\":\"Invalid credentials\"}");
       }
     } else {
@@ -733,7 +1312,7 @@ void setupWebServer() {
           if (sessions[i].active && sessions[i].id == sessionId) {
             sessions[i].active = false;
             sessionFound = true;
-            Serial.println("Session invalidated: " + sessionId);
+            DEBUG("Session invalidated: " + sessionId);
             
             // Save the sessions
             saveSessions();
@@ -762,11 +1341,10 @@ void setupWebServer() {
     
     StaticJsonDocument<512> doc;
     doc["move_interval"] = move_interval / 1000; // Convert to seconds for readability
-    doc["movement_x"] = movement_x;
-    doc["movement_y"] = movement_y;
+    doc["movement_pattern"] = movement_pattern;
+    doc["movement_size"] = movement_size;
     doc["movement_speed"] = movement_speed;
     doc["jiggler_enabled"] = jiggler_enabled;
-    doc["circular_movement"] = circular_movement;
     doc["random_delay"] = random_delay;
     doc["movement_trail"] = movement_trail;
     
@@ -820,20 +1398,32 @@ void setupWebServer() {
         jiggler_enabled = doc["jiggler_enabled"].as<bool>();
       }
       
-      if (doc.containsKey("circular_movement")) {
-        circular_movement = doc["circular_movement"].as<bool>();
+      if (doc.containsKey("movement_pattern")) {
+        // Free old pattern string and allocate new one
+        if (movement_pattern != NULL) free(movement_pattern);
+        movement_pattern = strdup(doc["movement_pattern"].as<const char*>());
+      } else if (doc.containsKey("circular_movement")) {
+        // Handle legacy parameter
+        bool circular = doc["circular_movement"].as<bool>();
+        if (movement_pattern != NULL) free(movement_pattern);
+        movement_pattern = strdup(circular ? "circular" : "linear");
       }
       
       if (doc.containsKey("move_interval")) {
         move_interval = doc["move_interval"].as<int>() * 1000; // Convert from seconds to milliseconds
       }
       
-      if (doc.containsKey("movement_x")) {
-        movement_x = doc["movement_x"].as<int>();
-      }
-      
-      if (doc.containsKey("movement_y")) {
-        movement_y = doc["movement_y"].as<int>();
+      if (doc.containsKey("movement_size")) {
+        movement_size = doc["movement_size"].as<int>();
+      } else {
+        // For backwards compatibility
+        if (doc.containsKey("movement_x")) {
+          movement_size = abs(doc["movement_x"].as<int>());
+        }
+        if (doc.containsKey("movement_y")) {
+          // Use the larger of X or Y
+          movement_size = max(movement_size, abs(doc["movement_y"].as<int>()));
+        }
       }
       
       if (doc.containsKey("movement_speed")) {
@@ -855,7 +1445,7 @@ void setupWebServer() {
       last_move_time = millis();
       next_move_time = millis() + calculateMoveInterval();
       
-      Serial.println("Configuration updated via API");
+      DEBUG("Configuration updated via API");
       request->send(200, "application/json", "{\"status\":\"success\"}");
     } else {
       request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
@@ -909,9 +1499,9 @@ void setupWebServer() {
     
     // Auth settings
     JsonObject auth = doc.createNestedObject("auth");
+    auth["enabled"] = auth_enabled;
     auth["username"] = current_username;
-    // Don't send the actual password for security
-    auth["password"] = "";
+    auth["password"] = current_auth_password;
     
     // Web port
     doc["web_port"] = current_webport;
@@ -1001,6 +1591,10 @@ void setupWebServer() {
       
       // Update Auth settings
       if (doc.containsKey("auth")) {
+        if (doc["auth"].containsKey("enabled")) {
+          auth_enabled = doc["auth"]["enabled"].as<bool>();
+          changed = true;
+        }
         if (doc["auth"].containsKey("username")) {
           if (current_username != NULL) free(current_username);
           current_username = strdup(doc["auth"]["username"].as<const char*>());
@@ -1090,34 +1684,215 @@ void setupWebServer() {
     
     // First chunk received
     if (index == 0) {
-      Serial.printf("OTA Update started: %s (Type: %s)\n", filename.c_str(), updateType.c_str());
+      DEBUGF("OTA Update started: %s (Type: %s)", filename.c_str(), updateType.c_str());
       
       // Start update with appropriate command based on type
       int cmd = (updateType == "filesystem") ? U_SPIFFS : U_FLASH;
       
       if (!Update.begin(UPDATE_SIZE_UNKNOWN, cmd)) {
-        Serial.println("OTA error: " + String(Update.errorString()));
+        DEBUG(String("OTA error: ") + Update.errorString());
       }
     }
     
     // Write chunk to flash
     if (Update.write(data, len) != len) {
-      Serial.println("OTA error: " + String(Update.errorString()));
+      DEBUG(String("OTA error: ") + Update.errorString());
     }
     
     // Final chunk - finish update
     if (final) {
       if (Update.end(true)) {
-        Serial.println("OTA update successful. Rebooting...");
+        DEBUG("OTA update successful. Rebooting...");
       } else {
-        Serial.println("OTA error: " + String(Update.errorString()));
+        DEBUG(String("OTA error: ") + Update.errorString());
       }
+    }
+  });
+  
+  // API endpoint for touchpad mouse movement
+  server->on("/api/touchpad/move", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // Only validate the session in the first handler
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      request->_tempObject = (void*)1; // Mark as processed
+      return;
+    }
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Check if response was already sent
+    if (request->_tempObject != NULL) {
+      return;
+    }
+    
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (!error) {
+      int x = doc["x"].as<int>();
+      int y = doc["y"].as<int>();
+      
+      // Move mouse by the specified amount
+      Mouse.move(x, y);
+      
+      // Update last move time
+      last_move_time = millis();
+      next_move_time = millis() + calculateMoveInterval();
+      
+      request->send(200, "application/json", "{\"status\":\"success\"}");
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+    }
+  });
+  
+  // API endpoint for touchpad mouse clicks
+  server->on("/api/touchpad/click", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // Only validate the session in the first handler
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      request->_tempObject = (void*)1; // Mark as processed
+      return;
+    }
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Check if response was already sent
+    if (request->_tempObject != NULL) {
+      return;
+    }
+    
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (!error) {
+      String button = doc["button"].as<String>();
+      String clickType = doc["clickType"].as<String>();
+      
+      if (button == "left") {
+        if (clickType == "double") {
+          // Double click (press-release-press-release)
+          DEBUG("Mouse double-click");
+          Mouse.press(MOUSE_LEFT);
+          delay(8);
+          Mouse.release(MOUSE_LEFT);
+          delay(8);
+          Mouse.press(MOUSE_LEFT);
+          delay(8);
+          Mouse.release(MOUSE_LEFT);
+        } else {
+          // Normal click (press and release)
+          DEBUG("Mouse single-click");
+          Mouse.press(MOUSE_LEFT);
+          delay(8);
+          Mouse.release(MOUSE_LEFT);
+        }
+      } else if (button == "right") {
+        // Right click (press and release)
+        DEBUG("Mouse right-click");
+        Mouse.press(MOUSE_RIGHT);
+        delay(8);
+        Mouse.release(MOUSE_RIGHT);
+      }
+      
+      // Update last move time
+      last_move_time = millis();
+      next_move_time = millis() + calculateMoveInterval();
+      
+      request->send(200, "application/json", "{\"status\":\"success\"}");
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+    }
+  });
+  
+  // API endpoint for touchpad button state (pressed/released)
+  server->on("/api/touchpad/button", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // Only validate the session in the first handler
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      request->_tempObject = (void*)1; // Mark as processed
+      return;
+    }
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Check if response was already sent
+    if (request->_tempObject != NULL) {
+      return;
+    }
+    
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (!error) {
+      String button = doc["button"].as<String>();
+      String state = doc["state"].as<String>();
+      
+      if (button == "left") {
+        if (state == "press") {
+          // Press left button without releasing
+          DEBUG("Mouse left button pressed");
+          Mouse.press(MOUSE_LEFT);
+        } else if (state == "release") {
+          // Release left button
+          DEBUG("Mouse left button released");
+          Mouse.release(MOUSE_LEFT);
+        }
+      } else if (button == "right") {
+        if (state == "press") {
+          // Press right button without releasing
+          DEBUG("Mouse right button pressed");
+          Mouse.press(MOUSE_RIGHT);
+        } else if (state == "release") {
+          // Release right button
+          DEBUG("Mouse right button released");
+          Mouse.release(MOUSE_RIGHT);
+        }
+      }
+      
+      // Update last move time
+      last_move_time = millis();
+      next_move_time = millis() + calculateMoveInterval();
+      
+      request->send(200, "application/json", "{\"status\":\"success\"}");
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+    }
+  });
+  
+  // API endpoint for touchpad mouse scroll
+  server->on("/api/touchpad/scroll", HTTP_POST, [](AsyncWebServerRequest *request) {
+    // Only validate the session in the first handler
+    if (!validateSession(request)) {
+      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
+      request->_tempObject = (void*)1; // Mark as processed
+      return;
+    }
+  }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    // Check if response was already sent
+    if (request->_tempObject != NULL) {
+      return;
+    }
+    
+    StaticJsonDocument<128> doc;
+    DeserializationError error = deserializeJson(doc, data, len);
+    
+    if (!error) {
+      int amount = doc["amount"].as<int>();
+      
+      // Further amplify scroll amount for large screens
+      int scrollMultiplier = 10; // Additional server-side multiplier (increased from 5 to 10)
+      int scaledAmount = amount * scrollMultiplier;
+      
+      // Scroll the mouse wheel (positive = down, negative = up)
+      Mouse.move(0, 0, scaledAmount);
+      
+      // Update last move time
+      last_move_time = millis();
+      next_move_time = millis() + calculateMoveInterval();
+      
+      request->send(200, "application/json", "{\"status\":\"success\"}");
+    } else {
+      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
     }
   });
   
   // Start server
   server->begin();
-  Serial.println("Web server started");
+  DEBUG("Web server started");
 }
 
 // Calculate movement interval, applying randomization if enabled
@@ -1135,29 +1910,79 @@ unsigned long calculateMoveInterval() {
 
 // Perform mouse movement based on settings
 void moveMouse() {
+  // For tracking the overall displacement from the starting position
+  static int totalDisplacementX = 0;
+  static int totalDisplacementY = 0;
+  
   if (movement_trail) {
     // Create a movement trail with multiple movements
+    int trailMovementX = 0;
+    int trailMovementY = 0;
+    
+    // Perform multiple movements to create a trail
     for (int i = 0; i < 3; i++) {
-      if (circular_movement) {
+      // Store current displacement before this movement
+      int beforeX = totalDisplacementX;
+      int beforeY = totalDisplacementY;
+      
+      // Capture the current values of movement_size
+      int originalMovementSize = movement_size;
+      
+      // Adjust for this iteration of the trail (making each step smaller)
+      movement_size = movement_size / 2;
+      
+      // Perform the movement based on pattern
+      if (strcmp(movement_pattern, "circular") == 0) {
         moveMouseCircular();
+      } else if (strcmp(movement_pattern, "rectangle") == 0) {
+        moveMouseRectangle();
+      } else if (strcmp(movement_pattern, "triangle") == 0) {
+        moveMouseTriangle();
+      } else if (strcmp(movement_pattern, "zigzag") == 0) {
+        moveMouseZigzag();
       } else {
+        // Default to linear
         moveMouseLinear();
       }
+      
+      // Restore original movement values
+      movement_size = originalMovementSize;
+      
+      // Track any change in displacement that didn't perfectly return to start
+      trailMovementX += (totalDisplacementX - beforeX);
+      trailMovementY += (totalDisplacementY - beforeY);
+      
+      // Ensure cursor returns to initial position after each movement
+      resetCursorPosition();
+      
       delay(100); // Brief pause between trail movements
     }
   } else {
-    // Single movement
-    if (circular_movement) {
+    // Single movement based on selected pattern
+    if (strcmp(movement_pattern, "circular") == 0) {
       moveMouseCircular();
+    } else if (strcmp(movement_pattern, "rectangle") == 0) {
+      moveMouseRectangle();
+    } else if (strcmp(movement_pattern, "triangle") == 0) {
+      moveMouseTriangle();
+    } else if (strcmp(movement_pattern, "zigzag") == 0) {
+      moveMouseZigzag();
     } else {
+      // Default to linear
       moveMouseLinear();
     }
+    
+    // Always reset cursor position after movement
+    resetCursorPosition();
   }
+  
+  // Add a delay based on the movement_speed setting
+  delay(movement_speed);
 }
 
 // Save sessions to flash
 void saveSessions() {
-  Serial.println("Saving sessions");
+  DEBUG("Saving sessions");
   
   StaticJsonDocument<2048> doc;
   JsonArray sessionsArray = doc.createNestedArray("sessions");
@@ -1174,19 +1999,19 @@ void saveSessions() {
   File file = SPIFFS.open("/sessions.json", "w");
   if (file) {
     if (serializeJson(doc, file) == 0) {
-      Serial.println("Failed to write sessions");
+      DEBUG("Failed to write sessions");
     } else {
-      Serial.println("Sessions saved successfully");
+      DEBUG("Sessions saved successfully");
     }
     file.close();
   } else {
-    Serial.println("Failed to open sessions file for writing");
+    DEBUG("Failed to open sessions file for writing");
   }
 }
 
 // Load sessions from flash
 void loadSessions() {
-  Serial.println("Loading sessions");
+  DEBUG("Loading sessions");
   
   if (SPIFFS.exists("/sessions.json")) {
     File file = SPIFFS.open("/sessions.json", "r");
@@ -1218,15 +2043,24 @@ void loadSessions() {
           }
         }
         
-        Serial.printf("Loaded %d sessions\n", i);
+        DEBUGF("Loaded %d sessions", i);
+        
+        // Debug: list all active sessions
+        for (int j = 0; j < MAX_SESSIONS; j++) {
+          if (sessions[j].active) {
+            DEBUGF("Active session: id=%s, expiry=%lu, current=%lu, diff=%ld", 
+                          sessions[j].id.c_str(), sessions[j].expiry, millis(), 
+                          (long)(sessions[j].expiry - millis()));
+          }
+        }
       } else {
-        Serial.println("Failed to deserialize sessions");
+        DEBUG("Failed to deserialize sessions");
       }
       
       file.close();
     }
   } else {
-    Serial.println("Sessions file doesn't exist");
+    DEBUG("Sessions file doesn't exist");
   }
 }
 
@@ -1242,4 +2076,17 @@ void cleanupMemory() {
   if (ap_availability != NULL) free(ap_availability);
   if (sta_ssid != NULL) free(sta_ssid);
   if (sta_password != NULL) free(sta_password);
+}
+
+// Reset cursor to initial position
+void resetCursorPosition() {
+  if (totalDisplacementX != 0 || totalDisplacementY != 0) {
+    // Move back to the original position
+    Mouse.move(-totalDisplacementX, -totalDisplacementY);
+    DEBUGF("Reset cursor to initial position: (%d, %d)", -totalDisplacementX, -totalDisplacementY);
+    
+    // Reset displacement tracking
+    totalDisplacementX = 0;
+    totalDisplacementY = 0;
+  }
 }

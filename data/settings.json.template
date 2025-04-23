@@ -1,7 +1,7 @@
 {
   "ap": {
     "ssid": "jiggla",
-    "password": "default_password",
+    "password": "jiggla01",
     "hidden": false
   },
   "hostname": "jiggla",
@@ -10,11 +10,12 @@
     "password": "your_wifi_password"
   },
   "auth": {
+    "enabled": false,
     "username": "admin",
-    "password": "admin_password"
+    "password": "Jiggla01"
   },
   "wifi_mode": "ap",
   "ap_availability": "always",
   "ap_timeout": 5,
-  "web_port": 8787
+  "web_port": 80
 } 

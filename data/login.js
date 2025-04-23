@@ -7,12 +7,24 @@ document.addEventListener('DOMContentLoaded', function() {
   // Check if already authenticated
   async function checkAuth() {
     try {
+      console.log("Checking authentication status...");
       const response = await fetch('/api/auth/check', {
-        credentials: 'same-origin'
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache'
+        }
       });
+      
+      console.log("Auth check response status:", response.status);
+      
       if (response.ok) {
         // Already authenticated, redirect to main page
+        console.log("Already authenticated, redirecting to main page");
         window.location.href = '/';
+      } else {
+        console.log("Not authenticated, staying on login page");
       }
     } catch (error) {
       // Not authenticated, stay on login page
@@ -40,6 +52,7 @@ document.addEventListener('DOMContentLoaded', function() {
           'Content-Type': 'application/json'
         },
         credentials: 'same-origin',
+        cache: 'no-store',
         body: JSON.stringify({ username, password })
       });
       
@@ -50,7 +63,7 @@ document.addEventListener('DOMContentLoaded', function() {
         showStatus('Login successful! Redirecting...', true);
         setTimeout(() => {
           window.location.href = '/';
-        }, 500);
+        }, 1500);
       } else {
         showStatus(data.message || 'Login failed', false);
         loginButton.disabled = false;

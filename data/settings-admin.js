@@ -1,3 +1,35 @@
+// Global function for password toggle
+window.togglePassword = function(inputId) {
+  const input = document.getElementById(inputId);
+  const button = input.nextElementSibling;
+  const icon = button.querySelector('i');
+  
+  if (input.type === 'password') {
+    input.type = 'text';
+    icon.classList.remove('bi-eye');
+    icon.classList.add('bi-eye-slash');
+  } else {
+    input.type = 'password';
+    icon.classList.remove('bi-eye-slash');
+    icon.classList.add('bi-eye');
+  }
+};
+
+// Global function to copy new URL
+window.copyNewUrl = function() {
+  const urlInput = document.getElementById('newDeviceUrl');
+  urlInput.select();
+  document.execCommand('copy');
+  
+  // Show feedback
+  const copyButton = urlInput.nextElementSibling;
+  const originalHtml = copyButton.innerHTML;
+  copyButton.innerHTML = '<i class="bi bi-check"></i>';
+  setTimeout(() => {
+    copyButton.innerHTML = originalHtml;
+  }, 2000);
+};
+
 document.addEventListener('DOMContentLoaded', function() {
   // Get DOM elements
   const loadingDiv = document.getElementById('loading');
@@ -6,11 +38,20 @@ document.addEventListener('DOMContentLoaded', function() {
   const rebootButton = document.getElementById('reboot-button');
   const statusDiv = document.getElementById('status');
   const settingsForm = document.getElementById('settings-form');
+  const logoutButton = document.getElementById('logout-button');
+  
+  // Modal elements
+  const rebootModal = new bootstrap.Modal(document.getElementById('rebootModal'));
+  const rebootCountdown = document.getElementById('rebootCountdown');
+  const newUrlInfo = document.getElementById('newUrlInfo');
+  const newDeviceUrl = document.getElementById('newDeviceUrl');
+  const redirectButton = document.getElementById('redirectButton');
   
   // Form inputs
+  const authEnabled = document.getElementById('auth-enabled');
+  const authSettingsContainer = document.getElementById('auth-settings-container');
   const authUsername = document.getElementById('auth-username');
   const authPassword = document.getElementById('auth-password');
-  const authPasswordConfirm = document.getElementById('auth-password-confirm');
   const apSSID = document.getElementById('ap-ssid');
   const apPassword = document.getElementById('ap-password');
   const hostname = document.getElementById('hostname');
@@ -27,6 +68,17 @@ document.addEventListener('DOMContentLoaded', function() {
   const apAvailabilityTimeout = document.getElementById('ap-availability-timeout');
   const apTimeout = document.getElementById('ap-timeout');
   const apTimeoutContainer = document.getElementById('ap-timeout-container');
+  
+  // Show/hide auth settings based on toggle
+  authEnabled.addEventListener('change', function() {
+    authSettingsContainer.style.display = this.checked ? 'block' : 'none';
+    // Update required attributes
+    const authInputs = [authUsername, authPassword];
+    authInputs.forEach(input => {
+      input.required = this.checked;
+      input.disabled = !this.checked;
+    });
+  });
   
   // Show/hide STA settings based on WiFi mode selection
   wifiModeAPSTA.addEventListener('change', function() {
@@ -97,7 +149,15 @@ document.addEventListener('DOMContentLoaded', function() {
       // Populate form fields
       // Authentication
       if (settings.auth) {
+        authEnabled.checked = settings.auth.enabled !== false; // Default to true if not specified
         authUsername.value = settings.auth.username || '';
+        // Update auth settings visibility
+        authSettingsContainer.style.display = authEnabled.checked ? 'block' : 'none';
+        const authInputs = [authUsername, authPassword];
+        authInputs.forEach(input => {
+          input.required = authEnabled.checked;
+          input.disabled = !authEnabled.checked;
+        });
       }
       
       // AP settings
@@ -137,7 +197,7 @@ document.addEventListener('DOMContentLoaded', function() {
       }
       
       // Web port
-      webPort.value = settings.web_port || 8787;
+      webPort.value = settings.web_port || 80;
       
     } catch (error) {
       console.error('Settings load error:', error);
@@ -153,9 +213,14 @@ document.addEventListener('DOMContentLoaded', function() {
         return;
       }
       
+      // Store old values for comparison
+      const oldHostname = hostname.value;
+      const oldPort = webPort.value;
+      
       // Prepare settings object
       const settings = {
         auth: {
+          enabled: authEnabled.checked,
           username: authUsername.value,
           password: authPassword.value
         },
@@ -175,22 +240,67 @@ document.addEventListener('DOMContentLoaded', function() {
         web_port: parseInt(webPort.value)
       };
       
+      console.log('Sending settings:', settings);
+      
       // Send to server
       const response = await fetch('/api/settings', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
         },
         credentials: 'same-origin',
         body: JSON.stringify(settings)
       });
       
+      console.log('Response status:', response.status);
+      
       if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.message || 'Failed to save settings');
+        let errorMessage = 'Failed to save settings';
+        try {
+          const data = await response.json();
+          errorMessage = data.message || errorMessage;
+        } catch (e) {
+          console.error('Error parsing error response:', e);
+        }
+        throw new Error(errorMessage);
       }
       
-      showStatus('Settings saved successfully! A device reboot may be required for some changes to take effect.', true);
+      const result = await response.json();
+      console.log('Save response:', result);
+      
+      // Check if hostname or port changed
+      const urlChanged = oldHostname !== settings.hostname || oldPort !== settings.web_port;
+      
+      // Show reboot modal
+      if (urlChanged) {
+        const newUrl = `http://${settings.hostname}.local:${settings.web_port}`;
+        newDeviceUrl.value = newUrl;
+        newUrlInfo.classList.remove('d-none');
+        redirectButton.onclick = () => window.location.href = newUrl;
+      } else {
+        newUrlInfo.classList.add('d-none');
+      }
+      
+      // Show modal and start countdown
+      rebootModal.show();
+      let countdown = 30;
+      rebootCountdown.textContent = countdown;
+      
+      const countdownInterval = setInterval(() => {
+        countdown--;
+        rebootCountdown.textContent = countdown;
+        
+        if (countdown <= 0) {
+          clearInterval(countdownInterval);
+          if (urlChanged) {
+            window.location.href = newDeviceUrl.value;
+          } else {
+            window.location.href = '/login';
+          }
+        }
+      }, 1000);
+      
     } catch (error) {
       console.error('Settings save error:', error);
       showStatus('Failed to save settings: ' + error.message, false);
@@ -199,25 +309,21 @@ document.addEventListener('DOMContentLoaded', function() {
   
   // Validate form inputs
   function validateForm() {
-    // Check username
-    if (!authUsername.value.trim()) {
-      showStatus('Username cannot be empty', false);
-      authUsername.focus();
-      return false;
-    }
-    
-    // Check password
-    if (authPassword.value && authPassword.value.length < 8) {
-      showStatus('Password must be at least 8 characters long', false);
-      authPassword.focus();
-      return false;
-    }
-    
-    // Check password confirmation
-    if (authPassword.value !== authPasswordConfirm.value) {
-      showStatus('Passwords do not match', false);
-      authPasswordConfirm.focus();
-      return false;
+    // Check auth settings if enabled
+    if (authEnabled.checked) {
+      // Check username
+      if (!authUsername.value.trim()) {
+        showStatus('Username cannot be empty', false);
+        authUsername.focus();
+        return false;
+      }
+      
+      // Check password
+      if (authPassword.value && authPassword.value.length < 3) {
+        showStatus('Password must be at least 3 characters long', false);
+        authPassword.focus();
+        return false;
+      }
     }
     
     // Check AP SSID
@@ -302,6 +408,23 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
+  // Logout function
+  async function logout() {
+    try {
+      const response = await fetch('/api/auth/logout', {
+        method: 'POST',
+        credentials: 'same-origin'
+      });
+      
+      // Redirect to login page regardless of response
+      window.location.href = '/login';
+    } catch (error) {
+      console.error('Logout error:', error);
+      // Still redirect to login on error
+      window.location.href = '/login';
+    }
+  }
+  
   // Show status message
   function showStatus(message, isSuccess) {
     statusDiv.textContent = message;
@@ -315,6 +438,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Event listeners
   saveButton.addEventListener('click', saveSettings);
   rebootButton.addEventListener('click', rebootDevice);
+  if (logoutButton) logoutButton.addEventListener('click', logout);
   
   // Initialize page
   init();

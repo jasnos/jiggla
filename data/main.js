@@ -1,23 +1,109 @@
 document.addEventListener('DOMContentLoaded', function() {
   try {
-    // Get references to DOM elements
+    // Get common elements present on all pages
     const loadingDiv = document.getElementById('loading');
     const contentDiv = document.getElementById('content');
-    const jigglerEnabledCheckbox = document.getElementById('jiggler-enabled');
-    const circularMovementCheckbox = document.getElementById('circular-movement');
-    const moveIntervalInput = document.getElementById('move-interval');
-    const movementXInput = document.getElementById('movement-x');
-    const movementYInput = document.getElementById('movement-y');
-    const movementSpeedInput = document.getElementById('movement-speed');
-    const testButton = document.getElementById('test-button');
     const logoutButton = document.getElementById('logout-button');
-    const statusDiv = document.getElementById('status');
-    const saveStatus = document.getElementById('save-status');
-    const xValue = document.getElementById('x-value');
-    const yValue = document.getElementById('y-value');
-    const lastMovement = document.getElementById('last-movement');
-    const activityLog = document.getElementById('activity-log');
-    const nextMovementCountdown = document.getElementById('next-movement-countdown');
+    
+    // Global function to update movement delay from slider
+    window.updateMovementDelay = function(sliderValue) {
+      const delayInput = document.getElementById('movement-speed');
+      if (delayInput) {
+        // Formula: 3000ms when slider=0, 1ms when slider=100
+        const delayValue = Math.round(3000 - (sliderValue / 100) * 2999);
+        console.log(`Global: Slider value ${sliderValue}, setting delay to ${delayValue}`);
+        delayInput.value = delayValue;
+        
+        // Trigger change for auto-save
+        const event = new Event('change', { bubbles: true });
+        delayInput.dispatchEvent(event);
+      }
+    };
+    
+    // Determine which page we're on
+    const isJigglerPage = window.location.pathname === '/' || window.location.pathname === '/index.html';
+    
+    // Only get jiggler-specific elements if we're on the jiggler page
+    let jigglerElements = {};
+    
+    // Check authentication
+    async function checkAuth() {
+      try {
+        console.log("Dashboard: Checking authentication...");
+        const response = await fetch('/api/auth/check', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: {
+            'Pragma': 'no-cache',
+            'Cache-Control': 'no-cache'
+          }
+        });
+        
+        console.log("Dashboard: Auth check response status:", response.status);
+        
+        if (response.ok) {
+          // Authenticated, show content
+          console.log("Dashboard: Authentication successful, showing content");
+          if (loadingDiv) loadingDiv.style.display = 'none';
+          if (contentDiv) contentDiv.style.display = 'block';
+          
+          // Only initialize jiggler if we're on the jiggler page
+          if (isJigglerPage) {
+            // Add a small delay to ensure all elements are loaded
+            setTimeout(() => {
+              try {
+                jigglerElements = {
+                  jigglerEnabledCheckbox: document.getElementById('jiggler-enabled'),
+                  moveIntervalInput: document.getElementById('move-interval'),
+                  movementPatternSelect: document.getElementById('movement-pattern'),
+                  movementSizeInput: document.getElementById('movement-size'),
+                  movementSpeedInput: document.getElementById('movement-speed'),
+                  testButton: document.getElementById('test-button'),
+                  statusDiv: document.getElementById('status'),
+                  saveStatus: document.getElementById('save-status'),
+                  sizeValue: document.getElementById('size-value'),
+                  lastMovement: document.getElementById('last-movement'),
+                  activityLog: document.getElementById('activity-log'),
+                  nextMovementCountdown: document.getElementById('next-movement-countdown'),
+                  randomDelayCheckbox: document.getElementById('random-delay'),
+                  movementTrailCheckbox: document.getElementById('movement-trail'),
+                  speedValue: document.getElementById('speed-value')
+                };
+                
+                // Log which elements were found for debugging
+                console.log("Found elements:", Object.entries(jigglerElements).reduce((acc, [key, value]) => {
+                  acc[key] = !!value;
+                  return acc;
+                }, {}));
+                
+                // Verify all required elements exist for jiggler page
+                const requiredElements = ['jigglerEnabledCheckbox', 'moveIntervalInput', 'movementPatternSelect', 
+                                        'movementSizeInput', 'movementSpeedInput', 'saveStatus'];
+                const missingElements = requiredElements.filter(elem => !jigglerElements[elem]);
+                
+                if (missingElements.length > 0) {
+                  console.error("Required form elements not found:", missingElements);
+                  return;
+                }
+                
+                // Initialize jiggler functionality only after all elements are confirmed present
+                initializeJiggler();
+              } catch (error) {
+                console.error("Error initializing jiggler elements:", error);
+              }
+            }, 100);
+          }
+        } else {
+          console.log('Dashboard: Authentication failed, redirecting to login');
+          // Not authenticated, redirect to login
+          window.location.href = '/login';
+        }
+      } catch (error) {
+        console.error("Dashboard: Authentication error:", error);
+        // Error, redirect to login
+        window.location.href = '/login?error=' + encodeURIComponent('Connection error');
+      }
+    }
     
     // Store device info for countdown
     let deviceInfo = {
@@ -30,127 +116,154 @@ document.addEventListener('DOMContentLoaded', function() {
     // Countdown timer interval
     let countdownInterval = null;
     
-    // Verify all required elements exist
-    if (!jigglerEnabledCheckbox || !moveIntervalInput || !movementXInput || 
-        !movementYInput || !movementSpeedInput || !saveStatus) {
-      console.error("Required form elements not found");
-      return;
-    }
-    
-    // Additional controls (new features)
-    const randomDelayCheckbox = document.getElementById('random-delay');
-    const movementTrailCheckbox = document.getElementById('movement-trail');
-    
     // Auto-save timer
     let saveTimer = null;
     
-    // Update slider values - add error handling
-    if (movementXInput && xValue) {
-      movementXInput.addEventListener('input', () => {
-        xValue.textContent = movementXInput.value;
-      });
-    }
-    
-    if (movementYInput && yValue) {
-      movementYInput.addEventListener('input', () => {
-        yValue.textContent = movementYInput.value;
-      });
-    }
-    
-    // Auto-save function
-    function triggerAutoSave() {
-      if (!saveStatus) return;
+    // Function to initialize all jiggler-specific functionality
+    function initializeJiggler() {
+      // Update movement size value display
+      const movementSizeSlider = document.getElementById('movement-size');
+      const sizeValueDisplay = document.getElementById('size-value');
       
-      clearTimeout(saveTimer);
-      saveStatus.innerHTML = '<i class="bi bi-hourglass-split text-warning"></i> Saving...';
-      
-      // Delay save to avoid too many requests when changing sliders
-      saveTimer = setTimeout(() => {
-        saveConfig();
-      }, 500);
-    }
-    
-    // Setup auto-save for all config controls
-    document.querySelectorAll('.config-control').forEach(control => {
-      control.addEventListener('change', triggerAutoSave);
-      control.addEventListener('input', triggerAutoSave);
-    });
-    
-    // Special handler for jiggler enabled state
-    if (jigglerEnabledCheckbox) {
-      jigglerEnabledCheckbox.addEventListener('change', function() {
-        deviceInfo.jigglerEnabled = this.checked;
-        updateCountdownDisplay();
-      });
-    }
-    
-    // Check authentication
-    async function checkAuth() {
-      try {
-        const response = await fetch('/api/auth/check', {
-          // Include credentials to send cookies properly
-          credentials: 'same-origin',
-          cache: 'no-store'
+      if (movementSizeSlider && sizeValueDisplay) {
+        movementSizeSlider.addEventListener('input', () => {
+          sizeValueDisplay.textContent = movementSizeSlider.value;
         });
+      }
+      
+      // Direct implementation for movement speed slider
+      const slider = document.getElementById('movement-speed-slider');
+      const delayInput = document.getElementById('movement-speed');
+      
+      if (slider && delayInput) {
+        console.log("Setting up speed slider controls");
         
-        if (response.ok) {
-          // Authenticated, show content
-          if (loadingDiv) loadingDiv.style.display = 'none';
-          if (contentDiv) contentDiv.style.display = 'block';
-          loadConfig();
+        // Calculate delay value from slider position (0-100)
+        function updateDelayFromSlider() {
+          const sliderValue = parseInt(slider.value);
+          // Formula: 3000ms when slider=0, 1ms when slider=100
+          const delayValue = Math.round(3000 - (sliderValue / 100) * 2999);
+          console.log(`Slider value: ${sliderValue}, setting delay to: ${delayValue}`);
+          delayInput.value = delayValue;
           
-          // Setup a periodic check for last movement
-          setInterval(checkLastMovement, 5000);
-          
-          // Add success message to log
-          addToLog('Successfully authenticated');
-        } else {
-          console.log('Authentication failed, redirecting to login');
-          // Not authenticated, redirect to login
-          window.location.href = '/login';
+          // Trigger change for saving
+          delayInput.dispatchEvent(new Event('change', { bubbles: true }));
         }
-      } catch (error) {
-        console.error("Authentication error:", error);
-        // Error, redirect to login
-        window.location.href = '/login?error=' + encodeURIComponent('Connection error');
+        
+        // Set slider position based on delay value
+        function updateSliderFromDelay() {
+          const delayValue = parseInt(delayInput.value);
+          if (!isNaN(delayValue) && delayValue >= 1 && delayValue <= 3000) {
+            // Convert delay (3000-1) to slider (0-100)
+            const sliderValue = Math.round(((3000 - delayValue) / 2999) * 100);
+            console.log(`Delay value: ${delayValue}, setting slider to: ${sliderValue}`);
+            slider.value = sliderValue;
+          }
+        }
+        
+        // Add event listeners with direct function references
+        slider.addEventListener('input', updateDelayFromSlider);
+        delayInput.addEventListener('input', updateSliderFromDelay);
+        
+        // Initialize slider based on current delay value
+        updateSliderFromDelay();
+      }
+      
+      // Auto-save function
+      function triggerAutoSave() {
+        if (!jigglerElements.saveStatus) return;
+        
+        clearTimeout(saveTimer);
+        jigglerElements.saveStatus.innerHTML = '<i class="bi bi-hourglass-split text-warning"></i> Saving...';
+        
+        // Delay save to avoid too many requests when changing sliders
+        saveTimer = setTimeout(() => {
+          saveConfig();
+        }, 500);
+      }
+      
+      // Setup auto-save for all config controls
+      document.querySelectorAll('.config-control').forEach(control => {
+        control.addEventListener('change', triggerAutoSave);
+        control.addEventListener('input', triggerAutoSave);
+      });
+      
+      // Special handler for jiggler enabled state
+      if (jigglerElements.jigglerEnabledCheckbox) {
+        jigglerElements.jigglerEnabledCheckbox.addEventListener('change', function() {
+          deviceInfo.jigglerEnabled = this.checked;
+          updateCountdownDisplay();
+        });
+      }
+      
+      // Load initial configuration
+      loadConfig();
+      
+      // Setup periodic checks
+      setInterval(checkLastMovement, 5000);
+      
+      // Add initial success message to log
+      addToLog('Successfully initialized');
+      
+      // Setup event listeners
+      if (jigglerElements.testButton) {
+        jigglerElements.testButton.addEventListener('click', testMovement);
       }
     }
     
-    // Load current configuration
+    // Load configuration
     async function loadConfig() {
       try {
         const response = await fetch('/api/config', {
           credentials: 'same-origin'
         });
         
-        if (!response.ok) {
-          throw new Error('Failed to load configuration');
+        if (response.ok) {
+          const config = await response.json();
+          
+          if (jigglerElements.jigglerEnabledCheckbox) {
+            jigglerElements.jigglerEnabledCheckbox.checked = !!config.jiggler_enabled;
+            deviceInfo.jigglerEnabled = !!config.jiggler_enabled;
+          }
+          if (jigglerElements.movementPatternSelect) {
+            // Default to 'linear' if not set or using old circular_movement
+            if (config.movement_pattern) {
+              jigglerElements.movementPatternSelect.value = config.movement_pattern;
+            } else {
+              // Handle legacy setting
+              jigglerElements.movementPatternSelect.value = config.circular_movement ? 'circular' : 'linear';
+            }
+          }
+          if (jigglerElements.moveIntervalInput) jigglerElements.moveIntervalInput.value = config.move_interval || 240;
+          if (jigglerElements.movementSizeInput) {
+            // Divide by 2 since we multiply by 2 when saving
+            const size = (config.movement_size || Math.max(5, Math.abs(config.movement_x || 5), Math.abs(config.movement_y || 5))) / 2;
+            jigglerElements.movementSizeInput.value = size;
+            if (jigglerElements.sizeValue) jigglerElements.sizeValue.textContent = size;
+          }
+          if (jigglerElements.movementSpeedInput) {
+            const movementSpeed = config.movement_speed || 500;
+            // Set the value directly
+            jigglerElements.movementSpeedInput.value = movementSpeed;
+            
+            console.log("Setting initial movement speed to:", movementSpeed);
+            
+            // Force an event to update the slider
+            setTimeout(() => {
+              const event = new Event('input', { bubbles: true });
+              jigglerElements.movementSpeedInput.dispatchEvent(event);
+            }, 100);
+          }
+          
+          // New features (with defaults if not in config yet)
+          if (jigglerElements.randomDelayCheckbox) jigglerElements.randomDelayCheckbox.checked = !!config.random_delay;
+          if (jigglerElements.movementTrailCheckbox) jigglerElements.movementTrailCheckbox.checked = !!config.movement_trail;
+          
+          // Update last movement time
+          checkLastMovement();
+          
+          addToLog('Configuration loaded');
         }
-        
-        const config = await response.json();
-        
-        if (jigglerEnabledCheckbox) {
-          jigglerEnabledCheckbox.checked = !!config.jiggler_enabled;
-          deviceInfo.jigglerEnabled = !!config.jiggler_enabled;
-        }
-        if (circularMovementCheckbox) circularMovementCheckbox.checked = !!config.circular_movement;
-        if (moveIntervalInput) moveIntervalInput.value = config.move_interval || 540;
-        if (movementXInput) movementXInput.value = config.movement_x || 5;
-        if (movementYInput) movementYInput.value = config.movement_y || 5;
-        if (movementSpeedInput) movementSpeedInput.value = config.movement_speed || 10;
-        
-        // Set values for ranged inputs
-        if (xValue) xValue.textContent = config.movement_x || 5;
-        if (yValue) yValue.textContent = config.movement_y || 5;
-        
-        // New features (with defaults if not in config yet)
-        if (randomDelayCheckbox) randomDelayCheckbox.checked = !!config.random_delay;
-        if (movementTrailCheckbox) movementTrailCheckbox.checked = !!config.movement_trail;
-        
-        // Update last movement time
-        checkLastMovement();
-        
-        addToLog('Configuration loaded');
       } catch (error) {
         console.error("Config load error:", error);
         showStatus('Failed to load configuration: ' + error.message, false);
@@ -160,7 +273,7 @@ document.addEventListener('DOMContentLoaded', function() {
     // Get last movement time
     async function checkLastMovement() {
       try {
-        if (!lastMovement) return;
+        if (!jigglerElements.lastMovement) return;
         
         const response = await fetch('/api/status', {
           credentials: 'same-origin'
@@ -187,23 +300,23 @@ document.addEventListener('DOMContentLoaded', function() {
             // Format the time ago in a human-readable format
             if (timeSinceLastMove < 60000) {
               // Less than a minute
-              lastMovement.textContent = `${Math.floor(timeSinceLastMove / 1000)} seconds ago`;
+              jigglerElements.lastMovement.textContent = `${Math.floor(timeSinceLastMove / 1000)} seconds ago`;
             } else if (timeSinceLastMove < 3600000) {
               // Less than an hour
-              lastMovement.textContent = `${Math.floor(timeSinceLastMove / 60000)} minutes ago`;
+              jigglerElements.lastMovement.textContent = `${Math.floor(timeSinceLastMove / 60000)} minutes ago`;
             } else {
               // Hours and minutes
               const hours = Math.floor(timeSinceLastMove / 3600000);
               const minutes = Math.floor((timeSinceLastMove % 3600000) / 60000);
-              lastMovement.textContent = `${hours}h ${minutes}m ago`;
+              jigglerElements.lastMovement.textContent = `${hours}h ${minutes}m ago`;
             }
             
             // Start or update countdown timer
             updateCountdownTimer();
           } else {
-            lastMovement.textContent = "No movements yet";
-            if (nextMovementCountdown) {
-              nextMovementCountdown.textContent = deviceInfo.jigglerEnabled ? "Waiting for first movement" : "Jiggler is disabled";
+            jigglerElements.lastMovement.textContent = "No movements yet";
+            if (jigglerElements.nextMovementCountdown) {
+              jigglerElements.nextMovementCountdown.textContent = deviceInfo.jigglerEnabled ? "Waiting for first movement" : "Jiggler is disabled";
             }
           }
         }
@@ -214,7 +327,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update countdown timer
     function updateCountdownTimer() {
-      if (!nextMovementCountdown) return;
+      if (!jigglerElements.nextMovementCountdown) return;
       
       // Clear any existing countdown
       if (countdownInterval) {
@@ -230,11 +343,11 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Update countdown display
     function updateCountdownDisplay() {
-      if (!nextMovementCountdown) return;
+      if (!jigglerElements.nextMovementCountdown) return;
       
       // Check if jiggler is enabled
       if (!deviceInfo.jigglerEnabled) {
-        nextMovementCountdown.textContent = "Jiggler is disabled";
+        jigglerElements.nextMovementCountdown.textContent = "Jiggler is disabled";
         return;
       }
       
@@ -245,7 +358,7 @@ document.addEventListener('DOMContentLoaded', function() {
       
       // Only proceed if we have valid next move time
       if (!deviceInfo.nextMoveTime) {
-        nextMovementCountdown.textContent = "Waiting for next move";
+        jigglerElements.nextMovementCountdown.textContent = "Waiting for next move";
         return;
       }
       
@@ -257,16 +370,16 @@ document.addEventListener('DOMContentLoaded', function() {
         
         // Format as MM:SS
         const formattedTime = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        nextMovementCountdown.textContent = formattedTime;
+        jigglerElements.nextMovementCountdown.textContent = formattedTime;
       } else {
-        nextMovementCountdown.textContent = "Imminent";
+        jigglerElements.nextMovementCountdown.textContent = "Imminent";
       }
     }
     
     // Add entry to activity log
     function addToLog(message) {
       try {
-        if (!activityLog) return;
+        if (!jigglerElements.activityLog) return;
         
         const now = new Date();
         const timeString = now.toLocaleTimeString();
@@ -274,11 +387,11 @@ document.addEventListener('DOMContentLoaded', function() {
         logEntry.textContent = `[${timeString}] ${message}`;
         
         // Add to top of log
-        activityLog.insertBefore(logEntry, activityLog.firstChild);
+        jigglerElements.activityLog.insertBefore(logEntry, jigglerElements.activityLog.firstChild);
         
         // Limit log entries
-        if (activityLog.children.length > 50) {
-          activityLog.removeChild(activityLog.lastChild);
+        if (jigglerElements.activityLog.children.length > 50) {
+          jigglerElements.activityLog.removeChild(jigglerElements.activityLog.lastChild);
         }
       } catch (error) {
         console.error("Error adding to log:", error);
@@ -288,22 +401,21 @@ document.addEventListener('DOMContentLoaded', function() {
     // Save configuration
     async function saveConfig() {
       try {
-        if (!jigglerEnabledCheckbox || !circularMovementCheckbox || !moveIntervalInput ||
-            !movementXInput || !movementYInput || !movementSpeedInput) {
+        if (!jigglerElements.jigglerEnabledCheckbox || !jigglerElements.movementPatternSelect || !jigglerElements.moveIntervalInput ||
+            !jigglerElements.movementSizeInput || !jigglerElements.movementSpeedInput) {
           console.error("Missing form elements for save");
           return;
         }
         
-        const jigglerEnabled = jigglerEnabledCheckbox.checked;
-        const circularMovement = circularMovementCheckbox.checked;
-        const moveInterval = parseInt(moveIntervalInput.value);
-        const movementX = parseInt(movementXInput.value);
-        const movementY = parseInt(movementYInput.value);
-        const movementSpeed = parseInt(movementSpeedInput.value);
+        const jigglerEnabled = jigglerElements.jigglerEnabledCheckbox.checked;
+        const movementPattern = jigglerElements.movementPatternSelect.value;
+        const moveInterval = parseInt(jigglerElements.moveIntervalInput.value);
+        const movementSize = parseInt(jigglerElements.movementSizeInput.value) * 2; // Multiply by 2
+        const movementSpeed = parseInt(jigglerElements.movementSpeedInput.value);
         
         // New feature values
-        const randomDelay = randomDelayCheckbox ? randomDelayCheckbox.checked : false;
-        const movementTrail = movementTrailCheckbox ? movementTrailCheckbox.checked : false;
+        const randomDelay = jigglerElements.randomDelayCheckbox ? jigglerElements.randomDelayCheckbox.checked : false;
+        const movementTrail = jigglerElements.movementTrailCheckbox ? jigglerElements.movementTrailCheckbox.checked : false;
         
         // Validate input
         if (isNaN(moveInterval) || moveInterval < 1) {
@@ -311,31 +423,32 @@ document.addEventListener('DOMContentLoaded', function() {
           return;
         }
         
-        if (isNaN(movementX) || movementX < -200 || movementX > 200) {
-          showStatus('Movement X must be between -200 and 200', false);
+        if (isNaN(movementSize) || movementSize < 1 || movementSize > 200) {
+          showStatus('Movement size must be between 1 and 200', false);
           return;
         }
         
-        if (isNaN(movementY) || movementY < -200 || movementY > 200) {
-          showStatus('Movement Y must be between -200 and 200', false);
-          return;
-        }
-        
-        if (isNaN(movementSpeed) || movementSpeed < 1 || movementSpeed > 1000) {
-          showStatus('Movement speed must be between 1 and 1000 milliseconds', false);
+        if (isNaN(movementSpeed) || movementSpeed < 1 || movementSpeed > 3000) {
+          showStatus('Movement speed must be between 1 and 3000 milliseconds', false);
           return;
         }
         
         const config = {
           jiggler_enabled: jigglerEnabled,
-          circular_movement: circularMovement,
+          movement_pattern: movementPattern,
           move_interval: moveInterval,
-          movement_x: movementX,
-          movement_y: movementY,
+          movement_size: movementSize,
           movement_speed: movementSpeed,
           random_delay: randomDelay,
           movement_trail: movementTrail
         };
+        
+        // For backward compatibility with old versions
+        config.circular_movement = (movementPattern === 'circular');
+        
+        // Set X and Y to the same value for backward compatibility
+        config.movement_x = movementSize;
+        config.movement_y = movementSize;
         
         const response = await fetch('/api/config', {
           method: 'POST',
@@ -350,11 +463,11 @@ document.addEventListener('DOMContentLoaded', function() {
           throw new Error('Failed to save configuration');
         }
         
-        if (saveStatus) {
-          saveStatus.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> Saved';
+        if (jigglerElements.saveStatus) {
+          jigglerElements.saveStatus.innerHTML = '<i class="bi bi-check-circle-fill text-success"></i> Saved';
           
           setTimeout(() => {
-            saveStatus.innerHTML = '';
+            jigglerElements.saveStatus.innerHTML = '';
           }, 3000);
         }
         
@@ -364,8 +477,8 @@ document.addEventListener('DOMContentLoaded', function() {
         updateCountdownDisplay();
       } catch (error) {
         console.error("Save error:", error);
-        if (saveStatus) {
-          saveStatus.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> Error saving';
+        if (jigglerElements.saveStatus) {
+          jigglerElements.saveStatus.innerHTML = '<i class="bi bi-exclamation-triangle-fill text-danger"></i> Error saving';
         }
         addToLog('Error: ' + error.message);
       }
@@ -390,8 +503,8 @@ document.addEventListener('DOMContentLoaded', function() {
         setTimeout(checkLastMovement, 1000);
         
         // Clear any existing countdown until we get fresh data
-        if (nextMovementCountdown) {
-          nextMovementCountdown.textContent = "Refreshing...";
+        if (jigglerElements.nextMovementCountdown) {
+          jigglerElements.nextMovementCountdown.textContent = "Refreshing...";
         }
       } catch (error) {
         console.error("Test movement error:", error);
@@ -421,15 +534,15 @@ document.addEventListener('DOMContentLoaded', function() {
     // Show status message
     function showStatus(message, isSuccess) {
       try {
-        if (!statusDiv) return;
+        if (!jigglerElements.statusDiv) return;
         
-        statusDiv.textContent = message;
-        statusDiv.className = isSuccess ? 'alert alert-success mt-3' : 'alert alert-danger mt-3';
-        statusDiv.classList.remove('d-none');
+        jigglerElements.statusDiv.textContent = message;
+        jigglerElements.statusDiv.className = isSuccess ? 'alert alert-success mt-3' : 'alert alert-danger mt-3';
+        jigglerElements.statusDiv.classList.remove('d-none');
         
         // Hide status after 3 seconds
         setTimeout(() => {
-          statusDiv.classList.add('d-none');
+          jigglerElements.statusDiv.classList.add('d-none');
         }, 3000);
       } catch (error) {
         console.error("Status display error:", error);
@@ -437,12 +550,11 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Event listeners
-    if (testButton) testButton.addEventListener('click', testMovement);
     if (logoutButton) logoutButton.addEventListener('click', logout);
     
-    // Check authentication on page load
+    // Start the authentication check
     checkAuth();
   } catch (error) {
-    console.error("Initialization error:", error);
+    console.error("Dashboard initialization error:", error);
   }
 }); 

@@ -1,155 +1,275 @@
 <!DOCTYPE html>
-<html>
+<html lang="en" data-bs-theme="dark">
 <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Remote Mouse</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            margin: 0;
-            padding: 20px;
-            user-select: none;
-            -webkit-user-select: none;
-            touch-action: manipulation;
-        }
-        #trackpad {
-            width: 300px;
-            height: 200px;
-            background-color: #f0f0f0;
-            margin: 20px auto;
-            border: 2px solid #ccc;
-            border-radius: 10px;
-            position: relative;
-            touch-action: none;
-        }
-        .button {
-            padding: 10px 20px;
-            margin: 10px;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        .button-group {
-            display: flex;
-            justify-content: center;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Settings - Jiggla</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.2/font/bootstrap-icons.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700&display=swap" rel="stylesheet">
+  <style>
+    .logo-font {
+      font-family: 'Orbitron', sans-serif;
+      letter-spacing: 1px;
+    }
+    .navbar-brand {
+      font-size: 1.6rem;
+      font-weight: 700;
+    }
+  </style>
 </head>
-<body>
-    <h1>ESP32 Remote Mouse</h1>
-    <div id="trackpad"></div>
-    <div class="button-group">
-        <button class="button" id="leftClick">Left Click</button>
-        <button class="button" id="rightClick">Right Click</button>
+<body class="bg-dark">
+  <div id="loading" class="text-center mt-5">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Loading...</span>
     </div>
-    <p id="status">Status: Connected</p>
+    <p class="text-light mt-2">Loading...</p>
+  </div>
+  
+  <div id="content" class="container-fluid py-4" style="display: none;">
+    <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4">
+      <div class="container-fluid">
+        <a class="navbar-brand logo-font" href="/">
+          <i class="bi bi-mouse3"></i> JIGGLA
+        </a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+          <ul class="navbar-nav">
+            <li class="nav-item">
+              <a class="nav-link" href="/"><i class="bi bi-cursor-fill"></i> Mouse jiggler</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/touchpad.html"><i class="bi bi-hand-index-thumb-fill"></i> Remote Touchpad</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link active" href="/settings-admin.html"><i class="bi bi-gear-fill"></i> Admin Settings</a>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link" href="/ota.html"><i class="bi bi-cloud-arrow-up-fill"></i> OTA Update</a>
+            </li>
+          </ul>
+          <ul class="navbar-nav ms-auto">
+            <li class="nav-item">
+              <button id="logout-button" class="btn btn-sm btn-outline-light"><i class="bi bi-box-arrow-right"></i> Logout</button>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </nav>
 
-    <script>
-        const trackpad = document.getElementById('trackpad');
-        const leftClick = document.getElementById('leftClick');
-        const rightClick = document.getElementById('rightClick');
-        const status = document.getElementById('status');
-        
-        let lastX = 0;
-        let lastY = 0;
-        let isTracking = false;
-        
-        // Handle touch/mouse events on trackpad
-        trackpad.addEventListener('mousedown', startTracking);
-        trackpad.addEventListener('touchstart', handleTouchStart);
-        
-        document.addEventListener('mousemove', moveTracker);
-        document.addEventListener('touchmove', handleTouchMove);
-        
-        document.addEventListener('mouseup', stopTracking);
-        document.addEventListener('touchend', stopTracking);
-        
-        leftClick.addEventListener('click', () => sendClick('left'));
-        rightClick.addEventListener('click', () => sendClick('right'));
-        
-        function startTracking(e) {
-            isTracking = true;
-            e.preventDefault();
-            lastX = e.clientX;
-            lastY = e.clientY;
-        }
-        
-        function handleTouchStart(e) {
-            isTracking = true;
-            e.preventDefault();
-            const touch = e.touches[0];
-            lastX = touch.clientX;
-            lastY = touch.clientY;
-        }
-        
-        function moveTracker(e) {
-            if (!isTracking) return;
-            e.preventDefault();
+    <div class="row justify-content-center">
+      <div class="col-md-10">
+        <div class="card border-secondary">
+          <div class="card-header bg-danger text-white d-flex justify-content-between align-items-center">
+            <h3 class="mb-0">Admin Settings</h3>
+          </div>
+          <div class="card-body">
+            <form id="settings-form">
+              <div class="alert alert-warning">
+                <i class="bi bi-exclamation-triangle-fill"></i> 
+                <strong>Warning:</strong> Changing these settings may require a device reboot to take full effect.
+              </div>
+              
+              <!-- Authentication Settings -->
+              <div class="card bg-dark mb-4">
+                <div class="card-header bg-dark text-white">
+                  <h5><i class="bi bi-shield-lock me-2"></i> Authentication Settings</h5>
+                </div>
+                <div class="card-body">
+                  <div class="mb-3 form-check form-switch">
+                    <input class="form-check-input" type="checkbox" role="switch" id="auth-enabled" checked>
+                    <label class="form-check-label" for="auth-enabled">Enable Authentication</label>
+                    <div class="form-text">When disabled, anyone can access the web panel without login. Not recommended especially with STA mode enabled.</div>
+                  </div>
+                  <div id="auth-settings-container">
+                    <div class="mb-3">
+                      <label for="auth-username" class="form-label">Admin Username:</label>
+                      <input type="text" class="form-control" id="auth-username" required>
+                    </div>
+                    <div class="mb-3">
+                      <label for="auth-password" class="form-label">Admin Password:</label>
+                      <div class="input-group">
+                        <input type="password" class="form-control" id="auth-password" required>
+                        <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('auth-password')">
+                          <i class="bi bi-eye"></i>
+                        </button>
+                      </div>
+                      <div class="form-text" style="visibility: hidden">Password must be at least 3 characters long.</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- WiFi Mode Settings -->
+              <div class="card bg-dark mb-4">
+                <div class="card-header bg-dark text-white">
+                  <h5><i class="bi bi-router me-2"></i> WiFi Settings</h5>
+                </div>
+                <div class="card-body">
+                  <div class="mb-3">
+                    <label class="form-label">WiFi Mode:</label>
+                    <div class="form-check">
+                      <input class="form-check-input" type="radio" name="wifi-mode" id="wifi-mode-apsta" value="apsta">
+                      <label class="form-check-label" for="wifi-mode-apsta">
+                        AP+STA (Connect to WiFi and provide Access Point)
+                      </label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="radio" name="wifi-mode" id="wifi-mode-ap" value="ap" checked>
+                      <label class="form-check-label" for="wifi-mode-ap">
+                        AP Only (Only provide Access Point)
+                      </label>
+                    </div>
+                  </div>
+
+                  <hr>
+                  
+                  <!-- WiFi Client (STA) Mode Credentials -->
+                  <div class="mb-4">
+                    <h6 class="mb-3">Client Mode (STA) WiFi Credentials</h6>
+                    <div id="sta-settings-container" class="border-start border-info ps-3 mb-3">
+                      <div class="mb-3">
+                        <label for="sta-ssid" class="form-label">Connect to WiFi Network SSID:</label>
+                        <input type="text" class="form-control" id="sta-ssid" placeholder="Enter home/office WiFi name">
+                        <div class="form-text">The network your device will connect to</div>
+                      </div>
+                      <div class="mb-3">
+                        <label for="sta-password" class="form-label">WiFi Network Password:</label>
+                        <div class="input-group">
+                          <input type="password" class="form-control" id="sta-password" placeholder="Enter WiFi password">
+                          <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('sta-password')">
+                            <i class="bi bi-eye"></i>
+                          </button>
+                        </div>
+                        <div class="form-text">Password for the network you're connecting to</div>
+                      </div>
+                      <div class="form-text text-warning"><i class="bi bi-info-circle"></i> These settings are used when the device connects to an existing WiFi network in STA mode.</div>
+                    </div>
+                  </div>
+                  
+                  <!-- WiFi Access Point Settings -->
+                  <div class="mb-4">
+                    <h6 class="mb-3">Access Point (AP) WiFi Settings</h6>
+                    <div class="border-start border-success ps-3 mb-3">
+                      <div class="mb-3">
+                        <label for="ap-ssid" class="form-label">Access Point SSID:</label>
+                        <input type="text" class="form-control" id="ap-ssid" required>
+                        <div class="form-text">Name of the WiFi network this device will create</div>
+                      </div>
+                      <div class="mb-3">
+                        <label for="ap-password" class="form-label">Access Point Password:</label>
+                        <div class="input-group">
+                          <input type="password" class="form-control" id="ap-password" required>
+                          <button class="btn btn-outline-secondary" type="button" onclick="togglePassword('ap-password')">
+                            <i class="bi bi-eye"></i>
+                          </button>
+                        </div>
+                        <div class="form-text">Password must be at least 8 characters long.</div>
+                      </div>
+                      <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" id="hidden-ap">
+                        <label class="form-check-label" for="hidden-ap">Hide Access Point</label>
+                        <div class="form-text">Makes the WiFi network invisible in network scans</div>
+                      </div>
+                      <div class="form-text text-warning"><i class="bi bi-info-circle"></i> These settings control the WiFi network created by this device.</div>
+                    </div>
+                  </div>
+
+                  <hr>
+                  
+                  <div class="mb-3">
+                    <label class="form-label">AP Availability:</label>
+                    <div class="form-check">
+                      <input class="form-check-input" type="radio" name="ap-availability" id="ap-availability-always" value="always" checked>
+                      <label class="form-check-label" for="ap-availability-always">
+                        Always available
+                      </label>
+                    </div>
+                    <div class="form-check">
+                      <input class="form-check-input" type="radio" name="ap-availability" id="ap-availability-timeout" value="timeout">
+                      <label class="form-check-label" for="ap-availability-timeout">
+                        Available for specified time after boot
+                      </label>
+                    </div>
+                  </div>
+                  
+                  <div class="mb-3" id="ap-timeout-container" style="display: none;">
+                    <label for="ap-timeout" class="form-label">AP Timeout (minutes):</label>
+                    <input type="number" class="form-control" id="ap-timeout" min="1" max="60" value="5">
+                    <div class="form-text">AP will turn off after this many minutes since boot. If you need AP again just reboot the device. </div>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Web Server Settings -->
+              <div class="card bg-dark mb-4">
+                <div class="card-header bg-dark text-white">
+                  <h5><i class="bi bi-globe me-2"></i> Web Server Settings</h5>
+                </div>
+                <div class="card-body">
+                  <div class="mb-3">
+                    <label for="hostname" class="form-label">Device Hostname:</label>
+                    <input type="text" class="form-control" id="hostname" required>
+                    <div class="form-text">Used for mDNS address (hostname.local) in both AP and STA modes</div>
+                  </div>
+                  <div class="mb-3">
+                    <label for="web-port" class="form-label">Web Server Port:</label>
+                    <input type="number" class="form-control" id="web-port" min="1" max="65535" required>
+                    <div class="form-text">Default: 80. Changes will require a reboot.</div>
+                  </div>
+                </div>
+              </div>
+              
+              <!-- Submit Button -->
+              <div class="d-grid gap-2 mt-4">
+                <button type="button" id="save-button" class="btn btn-primary btn-lg">Save Settings</button>
+                <button type="button" id="reboot-button" class="btn btn-warning">Reboot Device</button>
+              </div>
+            </form>
             
-            const deltaX = e.clientX - lastX;
-            const deltaY = e.clientY - lastY;
-            
-            if (deltaX !== 0 || deltaY !== 0) {
-                sendMouseData(deltaX, deltaY);
-                lastX = e.clientX;
-                lastY = e.clientY;
-            }
-        }
-        
-        function handleTouchMove(e) {
-            if (!isTracking) return;
-            e.preventDefault();
-            
-            const touch = e.touches[0];
-            const deltaX = touch.clientX - lastX;
-            const deltaY = touch.clientY - lastY;
-            
-            if (deltaX !== 0 || deltaY !== 0) {
-                sendMouseData(deltaX, deltaY);
-                lastX = touch.clientX;
-                lastY = touch.clientY;
-            }
-        }
-        
-        function stopTracking() {
-            isTracking = false;
-        }
-        
-        function sendMouseData(x, y) {
-            fetch('/mouse', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    x: Math.round(x),
-                    y: Math.round(y)
-                })
-            })
-            .catch(error => {
-                status.textContent = 'Status: Connection error';
-                console.error('Error:', error);
-            });
-        }
-        
-        function sendClick(button) {
-            fetch('/click', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    button: button
-                })
-            })
-            .catch(error => {
-                status.textContent = 'Status: Connection error';
-                console.error('Error:', error);
-            });
-        }
-    </script>
+            <div id="status" class="alert mt-3 d-none"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Reboot Modal -->
+  <div class="modal fade" id="rebootModal" data-bs-backdrop="static" tabindex="-1" aria-labelledby="rebootModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content bg-dark text-light">
+        <div class="modal-header border-secondary">
+          <h5 class="modal-title" id="rebootModalLabel">Device Rebooting</h5>
+        </div>
+        <div class="modal-body">
+          <div class="text-center mb-4">
+            <div class="spinner-border text-primary mb-3" role="status">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Your settings have been saved successfully!</p>
+            <p>The device is now rebooting to apply the changes.</p>
+            <p>Please wait <span id="rebootCountdown">30</span> seconds...</p>
+          </div>
+          <div id="newUrlInfo" class="alert alert-info d-none">
+            <p class="mb-2"><strong>New Device URL:</strong></p>
+            <div class="input-group mb-3">
+              <input type="text" id="newDeviceUrl" class="form-control" readonly>
+              <button class="btn btn-outline-primary" type="button" onclick="copyNewUrl()">
+                <i class="bi bi-clipboard"></i>
+              </button>
+            </div>
+            <button id="redirectButton" class="btn btn-primary w-100">
+              Go to New URL
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="/settings-admin.js"></script>
 </body>
-</html>
+</html> 
