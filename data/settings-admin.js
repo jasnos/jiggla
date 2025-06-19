@@ -133,6 +133,22 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
+  // Simplified init for Basic Auth
+  async function init() {
+    try {
+      // Basic Auth is handled by the browser
+      // Load settings
+      await loadSettings();
+      
+      // Show content
+      loadingDiv.style.display = 'none';
+      contentDiv.style.display = 'block';
+    } catch (error) {
+      console.error('Initialization error:', error);
+      showStatus('Error initializing page: ' + error.message, false);
+    }
+  }
+  
   // Load settings from server
   async function loadSettings() {
     try {
@@ -408,23 +424,6 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   
-  // Logout function
-  async function logout() {
-    try {
-      const response = await fetch('/api/auth/logout', {
-        method: 'POST',
-        credentials: 'same-origin'
-      });
-      
-      // Redirect to login page regardless of response
-      window.location.href = '/login';
-    } catch (error) {
-      console.error('Logout error:', error);
-      // Still redirect to login on error
-      window.location.href = '/login';
-    }
-  }
-  
   // Show status message
   function showStatus(message, isSuccess) {
     statusDiv.textContent = message;
@@ -433,6 +432,12 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Scroll to status message
     statusDiv.scrollIntoView({ behavior: 'smooth' });
+  }
+  
+  // Define the logout function
+  function logout() {
+    // For HTTP Basic Auth, just reload the page
+    window.location.reload();
   }
   
   // Event listeners

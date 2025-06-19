@@ -151,11 +151,7 @@ int scaleMovementSize(int rawSize) {
 }
 
 void setup() {
-  // Initialize USB for both mouse and Serial
-  USB.VID(0x046d);
-  USB.PID(0xc077);
-  USB.manufacturerName("Logitech");
-  USB.productName("M105 Optical Mouse");
+  // Initialize USB using the values from platformio.ini
   USB.begin();
   
   delay(500);
@@ -1151,8 +1147,119 @@ void cleanupExpiredSessions() {
 void setupWebServer() {
   DEBUG("Setting up web server");
   
-  // Route to serve static files
-  server->serveStatic("/", SPIFFS, "/");
+  // Serve login.js with proper headers
+  server->on("/login.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Serving login.js directly");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/login.js", "application/javascript");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
+  });
+
+  // Serve main.js with proper headers
+  server->on("/main.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Serving main.js directly");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/main.js", "application/javascript");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
+  });
+
+  // Serve settings-admin.js with proper headers
+  server->on("/settings-admin.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Serving settings-admin.js directly");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/settings-admin.js", "application/javascript");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
+  });
+
+  // Route to serve static files with cache control
+  class CaptiveRequestHandler : public AsyncWebHandler {
+  public:
+    CaptiveRequestHandler() {}
+    virtual ~CaptiveRequestHandler() {}
+
+    bool canHandle(AsyncWebServerRequest *request) {
+      return true;
+    }
+
+    void handleRequest(AsyncWebServerRequest *request) {
+      // First check if resource exists
+      String path = request->url();
+      if (path.endsWith("/")) {
+        path += "index.html";
+      }
+
+      // Remove query parameters
+      if (path.indexOf("?") >= 0) {
+        path = path.substring(0, path.indexOf("?"));
+      }
+
+      DEBUG("Handling request for: " + path);
+
+      // Special handling for login.js
+      if (path == "/login.js") {
+        DEBUG("Handling login.js request specifically");
+        if (SPIFFS.exists(path)) {
+          DEBUG("login.js exists in SPIFFS");
+          AsyncWebServerResponse *response = request->beginResponse(SPIFFS, path, "application/javascript");
+          response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+          response->addHeader("Pragma", "no-cache");
+          response->addHeader("Expires", "-1");
+          request->send(response);
+          DEBUG("login.js sent with application/javascript content type");
+          return;
+        } else {
+          DEBUG("login.js not found in SPIFFS!");
+          request->send(404, "text/plain", "Not Found");
+          return;
+        }
+      }
+
+      // Check if file exists in SPIFFS
+      if (SPIFFS.exists(path)) {
+        DEBUG("File exists in SPIFFS");
+        // Get content type based on file extension
+        String contentType = "text/plain";
+        if (path.endsWith(".html")) contentType = "text/html";
+        else if (path.endsWith(".css")) contentType = "text/css";
+        else if (path.endsWith(".js")) contentType = "application/javascript";
+        else if (path.endsWith(".json")) contentType = "application/json";
+        else if (path.endsWith(".png")) contentType = "image/png";
+        else if (path.endsWith(".jpg")) contentType = "image/jpeg";
+        else if (path.endsWith(".ico")) contentType = "image/x-icon";
+        
+        DEBUG("Content type: " + contentType);
+        
+        // Serve the file with no-cache headers
+        AsyncWebServerResponse *response = request->beginResponse(SPIFFS, path, contentType);
+        
+        // Add no-cache headers to all responses
+        response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+        response->addHeader("Pragma", "no-cache");
+        response->addHeader("Expires", "-1");
+        
+        request->send(response);
+        DEBUG("File sent with no-cache headers");
+      } else {
+        DEBUG("File not found in SPIFFS: " + path);
+        if (validateSession(request)) {
+          // Not found, but authenticated
+          request->send(404, "text/plain", "Not Found");
+        } else {
+          // Not found, not authenticated - redirect to login
+          request->redirect("/login");
+        }
+      }
+    }
+  };
+
+  // Register the captive request handler
+  server->addHandler(new CaptiveRequestHandler());
   
   // Redirect all requests to login page if not authenticated
   server->onNotFound([](AsyncWebServerRequest *request) {
@@ -1169,13 +1276,17 @@ void setupWebServer() {
   server->on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     DEBUG("Received request for main page");
     
-    if (validateSession(request)) {
-      DEBUG("Session is valid, serving index.html from SPIFFS");
-      request->send(SPIFFS, "/index.html", "text/html");
-    } else {
-      DEBUG("Invalid session, redirecting to login");
+    if (!validateSession(request)) {
       request->redirect("/login");
+      return;
     }
+    
+    DEBUG("Auth successful, serving index.html");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/index.html", "text/html");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
   });
   
   // Serve login page
@@ -1183,14 +1294,13 @@ void setupWebServer() {
     if (validateSession(request)) {
       request->redirect("/");
     } else {
-      DEBUG("Serving login.html from SPIFFS");
-      request->send(SPIFFS, "/login.html", "text/html");
+      DEBUG("Serving login.html from SPIFFS with no-cache headers");
+      AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/login.html", "text/html");
+      response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+      response->addHeader("Pragma", "no-cache");
+      response->addHeader("Expires", "-1");
+      request->send(response);
     }
-  });
-  
-  // Block direct access to index.html
-  server->on("/index.html", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->redirect("/");
   });
   
   // Block direct access to login.html
@@ -1221,29 +1331,30 @@ void setupWebServer() {
   server->on("/api/auth/login", HTTP_POST, 
     [](AsyncWebServerRequest *request) {
       // Empty handler for request
-    }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-    // Process login request
-    if (request->_tempObject != NULL) {
-      // Already processed
-      return;
-    }
-    
-    // Mark as processed to prevent multiple responses
-    request->_tempObject = (void*)1;
-    
-    StaticJsonDocument<512> doc;
-    DeserializationError error = deserializeJson(doc, data, len);
-    
-    if (!error) {
+    }, 
+    NULL,  // Upload handler
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+      if (request->_tempObject != NULL) {
+        return;  // Already processed
+      }
+      
+      request->_tempObject = (void*)1;  // Mark as processed
+      
+      StaticJsonDocument<512> doc;
+      DeserializationError error = deserializeJson(doc, data, len);
+      
+      if (error) {
+        request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
+        return;
+      }
+      
       String username = doc["username"].as<String>();
       String password = doc["password"].as<String>();
       
       if (username == current_username && password == current_auth_password) {
-        // Create new session
         String sessionId = generateSessionId();
-        
-        // Find free slot
         int slot = -1;
+        
         for (int i = 0; i < MAX_SESSIONS; i++) {
           if (!sessions[i].active) {
             slot = i;
@@ -1255,26 +1366,13 @@ void setupWebServer() {
           sessions[slot].id = sessionId;
           sessions[slot].expiry = millis() + session_timeout;
           sessions[slot].active = true;
-          
-          // Save the sessions
           saveSessions();
           
-          // Set cookie
           AsyncWebServerResponse *response = request->beginResponse(200, "application/json", "{\"status\":\"success\"}");
-          
-          // Construct a more robust cookie - use the host from the request
-          String host = request->host();
-          int colonPos = host.indexOf(':');
-          if (colonPos != -1) {
-            host = host.substring(0, colonPos); // Remove port if present
-          }
-          
-          // Set the cookie with improved attributes
-          String cookieHeader = "session=" + sessionId + 
-                               "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + String(session_timeout / 1000);
-          
+          String cookieHeader = "session=" + sessionId + "; Path=/; HttpOnly; SameSite=Lax; Max-Age=" + String(session_timeout / 1000);
           response->addHeader("Set-Cookie", cookieHeader);
           request->send(response);
+          
           DEBUG("Login successful for user: " + username);
         } else {
           request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"No session slots available\"}");
@@ -1283,10 +1381,7 @@ void setupWebServer() {
         DEBUG("Login failed: Invalid credentials");
         request->send(401, "application/json", "{\"status\":\"error\",\"message\":\"Invalid credentials\"}");
       }
-    } else {
-      request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
-    }
-  });
+    });
   
   // API endpoint to logout
   server->on("/api/auth/logout", HTTP_POST, [](AsyncWebServerRequest *request) {
@@ -1357,8 +1452,7 @@ void setupWebServer() {
   // API endpoint to get device status information
   server->on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (!validateSession(request)) {
-      request->send(401, "application/json", "{\"status\":\"unauthorized\"}");
-      return;
+      return; // Auth handler already sent response
     }
     
     StaticJsonDocument<512> doc;
@@ -1647,7 +1741,12 @@ void setupWebServer() {
       request->redirect("/login");
       return;
     }
-    request->send(SPIFFS, "/ota.html", "text/html");
+    
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/ota.html", "text/html");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
   });
   
   // Handle redirect from /update to /ota.html
@@ -1888,6 +1987,58 @@ void setupWebServer() {
     } else {
       request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
     }
+  });
+  
+  // Serve touchpad.html with proper authentication
+  server->on("/touchpad.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Received request for touchpad page");
+    
+    if (!validateSession(request)) {
+      return; // Auth handler already sent response
+    }
+    
+    DEBUG("Auth successful, serving touchpad.html");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/touchpad.html", "text/html");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
+  });
+  
+  // Serve settings-admin.html with proper authentication
+  server->on("/settings-admin.html", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Received request for settings page");
+    
+    if (!validateSession(request)) {
+      return; // Auth handler already sent response
+    }
+    
+    DEBUG("Auth successful, serving settings-admin.html");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/settings-admin.html", "text/html");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
+  });
+  
+  // Serve touchpad.js with proper headers
+  server->on("/touchpad.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Serving touchpad.js directly");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/touchpad.js", "application/javascript");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
+  });
+  
+  // Serve settings-admin.js with proper headers
+  server->on("/settings-admin.js", HTTP_GET, [](AsyncWebServerRequest *request) {
+    DEBUG("Serving settings-admin.js directly");
+    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/settings-admin.js", "application/javascript");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    response->addHeader("Pragma", "no-cache");
+    response->addHeader("Expires", "-1");
+    request->send(response);
   });
   
   // Start server

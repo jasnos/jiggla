@@ -29,79 +29,54 @@ document.addEventListener('DOMContentLoaded', function() {
     // Check authentication
     async function checkAuth() {
       try {
-        console.log("Dashboard: Checking authentication...");
-        const response = await fetch('/api/auth/check', {
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: {
-            'Pragma': 'no-cache',
-            'Cache-Control': 'no-cache'
-          }
-        });
+        console.log("Dashboard: Checking content access...");
         
-        console.log("Dashboard: Auth check response status:", response.status);
-        
-        if (response.ok) {
-          // Authenticated, show content
-          console.log("Dashboard: Authentication successful, showing content");
-          if (loadingDiv) loadingDiv.style.display = 'none';
-          if (contentDiv) contentDiv.style.display = 'block';
+        // Show content immediately - Basic Auth is handled by the browser
+        if (loadingDiv) loadingDiv.style.display = 'none';
+        if (contentDiv) contentDiv.style.display = 'block';
           
-          // Only initialize jiggler if we're on the jiggler page
-          if (isJigglerPage) {
-            // Add a small delay to ensure all elements are loaded
-            setTimeout(() => {
-              try {
-                jigglerElements = {
-                  jigglerEnabledCheckbox: document.getElementById('jiggler-enabled'),
-                  moveIntervalInput: document.getElementById('move-interval'),
-                  movementPatternSelect: document.getElementById('movement-pattern'),
-                  movementSizeInput: document.getElementById('movement-size'),
-                  movementSpeedInput: document.getElementById('movement-speed'),
-                  testButton: document.getElementById('test-button'),
-                  statusDiv: document.getElementById('status'),
-                  saveStatus: document.getElementById('save-status'),
-                  sizeValue: document.getElementById('size-value'),
-                  lastMovement: document.getElementById('last-movement'),
-                  activityLog: document.getElementById('activity-log'),
-                  nextMovementCountdown: document.getElementById('next-movement-countdown'),
-                  randomDelayCheckbox: document.getElementById('random-delay'),
-                  movementTrailCheckbox: document.getElementById('movement-trail'),
-                  speedValue: document.getElementById('speed-value')
-                };
-                
-                // Log which elements were found for debugging
-                console.log("Found elements:", Object.entries(jigglerElements).reduce((acc, [key, value]) => {
-                  acc[key] = !!value;
-                  return acc;
-                }, {}));
-                
-                // Verify all required elements exist for jiggler page
-                const requiredElements = ['jigglerEnabledCheckbox', 'moveIntervalInput', 'movementPatternSelect', 
-                                        'movementSizeInput', 'movementSpeedInput', 'saveStatus'];
-                const missingElements = requiredElements.filter(elem => !jigglerElements[elem]);
-                
-                if (missingElements.length > 0) {
-                  console.error("Required form elements not found:", missingElements);
-                  return;
-                }
-                
-                // Initialize jiggler functionality only after all elements are confirmed present
-                initializeJiggler();
-              } catch (error) {
-                console.error("Error initializing jiggler elements:", error);
+        // Only initialize jiggler if we're on the jiggler page
+        if (isJigglerPage) {
+          // Add a small delay to ensure all elements are loaded
+          setTimeout(() => {
+            try {
+              jigglerElements = {
+                jigglerEnabledCheckbox: document.getElementById('jiggler-enabled'),
+                moveIntervalInput: document.getElementById('move-interval'),
+                movementPatternSelect: document.getElementById('movement-pattern'),
+                movementSizeInput: document.getElementById('movement-size'),
+                movementSpeedInput: document.getElementById('movement-speed'),
+                testButton: document.getElementById('test-button'),
+                statusDiv: document.getElementById('status'),
+                saveStatus: document.getElementById('save-status'),
+                sizeValue: document.getElementById('size-value'),
+                lastMovement: document.getElementById('last-movement'),
+                activityLog: document.getElementById('activity-log'),
+                nextMovementCountdown: document.getElementById('next-movement-countdown'),
+                randomDelayCheckbox: document.getElementById('random-delay'),
+                movementTrailCheckbox: document.getElementById('movement-trail'),
+                speedValue: document.getElementById('speed-value')
+              };
+              
+              // Verify all required elements exist for jiggler page
+              const requiredElements = ['jigglerEnabledCheckbox', 'moveIntervalInput', 'movementPatternSelect', 
+                                      'movementSizeInput', 'movementSpeedInput', 'saveStatus'];
+              const missingElements = requiredElements.filter(elem => !jigglerElements[elem]);
+              
+              if (missingElements.length > 0) {
+                console.error("Required form elements not found:", missingElements);
+                return;
               }
-            }, 100);
-          }
-        } else {
-          console.log('Dashboard: Authentication failed, redirecting to login');
-          // Not authenticated, redirect to login
-          window.location.href = '/login';
+              
+              // Initialize jiggler functionality
+              initializeJiggler();
+            } catch (error) {
+              console.error("Error initializing jiggler elements:", error);
+            }
+          }, 100);
         }
       } catch (error) {
-        console.error("Dashboard: Authentication error:", error);
-        // Error, redirect to login
-        window.location.href = '/login?error=' + encodeURIComponent('Connection error');
+        console.error("Dashboard initialization error:", error);
       }
     }
     
@@ -512,25 +487,6 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
     
-    // Logout
-    async function logout() {
-      try {
-        const response = await fetch('/api/auth/logout', {
-          method: 'POST',
-          credentials: 'same-origin'
-        });
-        
-        if (response.ok) {
-          window.location.href = '/login';
-        } else {
-          showStatus('Logout failed', false);
-        }
-      } catch (error) {
-        console.error("Logout error:", error);
-        showStatus('Logout failed: ' + error.message, false);
-      }
-    }
-    
     // Show status message
     function showStatus(message, isSuccess) {
       try {
@@ -549,8 +505,16 @@ document.addEventListener('DOMContentLoaded', function() {
       }
     }
     
-    // Event listeners
-    if (logoutButton) logoutButton.addEventListener('click', logout);
+    // Define logout function for Basic Auth
+    function logout() {
+      // For HTTP Basic Auth, just reload the page to trigger the auth dialog again
+      window.location.reload();
+    }
+    
+    // Add event listener for logout button
+    if (logoutButton) {
+      logoutButton.addEventListener('click', logout);
+    }
     
     // Start the authentication check
     checkAuth();

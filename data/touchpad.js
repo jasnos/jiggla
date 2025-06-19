@@ -70,22 +70,11 @@ document.addEventListener('DOMContentLoaded', function() {
     // Check authentication
     async function checkAuth() {
       try {
-        const response = await fetch('/api/auth/check', {
-          credentials: 'same-origin',
-          cache: 'no-store'
-        });
-        
-        if (response.ok) {
-          // Authenticated, show content
-          if (loadingDiv) loadingDiv.style.display = 'none';
-          if (contentDiv) contentDiv.style.display = 'block';
-        } else {
-          console.log('Authentication failed, redirecting to login');
-          window.location.href = '/login';
-        }
+        // Basic Auth is handled by the browser, just show content
+        if (loadingDiv) loadingDiv.style.display = 'none';
+        if (contentDiv) contentDiv.style.display = 'block';
       } catch (error) {
-        console.error("Authentication error:", error);
-        window.location.href = '/login?error=' + encodeURIComponent('Connection error');
+        console.error("Error initializing page:", error);
       }
     }
     
@@ -479,27 +468,17 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Logout
-    async function logout() {
-      try {
-        const response = await fetch('/api/auth/logout', {
-          method: 'POST',
-          credentials: 'same-origin'
-        });
-        
-        if (response.ok) {
-          window.location.href = '/login';
-        } else {
-          showStatus('Logout failed', false);
-        }
-      } catch (error) {
-        console.error("Logout error:", error);
-        showStatus('Logout failed: ' + error.message, false);
-      }
+    if (logoutButton) {
+      logoutButton.addEventListener('click', function() {
+        // For HTTP Basic Auth, just reload the page
+        window.location.reload();
+      });
     }
     
-    // Setup event handlers
-    if (logoutButton) {
-      logoutButton.addEventListener('click', logout);
+    // Define the logout function if it's needed
+    function logout() {
+      // For HTTP Basic Auth, just reload the page
+      window.location.reload();
     }
     
     // Stop continuous scrolling
