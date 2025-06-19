@@ -6,3 +6,4 @@
 **/*.orig
 credentials.h
 data/settings.json
+.DS_Store
